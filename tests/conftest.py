@@ -81,3 +81,28 @@ def isolated_database(tmp_path, monkeypatch):
     from config import config
 
     monkeypatch.setattr(config, "db_path", str(tmp_path / "portfolio.db"))
+
+
+@pytest.fixture
+def authenticated_client():
+    """旧业务路由测试也通过真实登录门禁，不在生产逻辑添加测试绕过。"""
+    import asyncio
+    from fastapi.testclient import TestClient
+    from database import init_db
+    from services import accounts
+    from run import app
+
+    password = "Synthetic-route-password-01!"
+
+    async def setup():
+        await init_db()
+        path = await accounts.issue_bootstrap_token()
+        await accounts.bootstrap_admin(token=path.read_text().strip(), username="route-admin", password=password)
+
+    asyncio.run(setup())
+    client = TestClient(app)
+    result = client.post("/api/auth/login", json={"username": "route-admin", "password": password})
+    assert result.status_code == 200
+    client.headers["X-CSRF-Token"] = result.json()["csrf_token"]
+    yield client
+    client.close()

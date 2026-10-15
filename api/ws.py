@@ -8,7 +8,7 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from database import get_all_holdings
 from services.market_data import (get_realtime_quotes, is_trading_day_active, markets_open,
                                   split_stock_code)
-from services import feishu_notify
+from services import feishu_notify, auth, accounts
 from config import config
 from services.runtime_paths import database_path, get_runtime_paths
 
@@ -31,6 +31,18 @@ async def broadcast(message: dict):
 
 @router.websocket("/ws")
 async def websocket_endpoint(ws: WebSocket):
+    expected_origin = f"{'https' if ws.url.scheme == 'wss' else 'http'}://{ws.url.netloc}"
+    if ws.headers.get("origin") != expected_origin:
+        await ws.close(code=4403)
+        return
+    try:
+        session = await auth.authenticate(ws.cookies.get(auth.COOKIE_NAME, ""))
+        if session.account.must_change_password:
+            await ws.close(code=4403)
+            return
+    except accounts.AccountError:
+        await ws.close(code=4401)
+        return
     await ws.accept()
     _clients.add(ws)
     try:

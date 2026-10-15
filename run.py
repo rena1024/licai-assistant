@@ -210,6 +210,8 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="理财助手", lifespan=lifespan)
+from services.auth import AuthenticationMiddleware
+app.add_middleware(AuthenticationMiddleware)
 
 # Mount static files (Vite build output)
 app.mount("/assets", StaticFiles(directory="static/assets"), name="assets")

@@ -1,4 +1,4 @@
-"""初始化入口；登录和会话交互在 A03 接入，不提供匿名密码恢复。"""
+"""初始化、登录与密码管理；不提供匿名网页恢复。"""
 from __future__ import annotations
 
 from dataclasses import asdict
@@ -7,7 +7,7 @@ from typing import Literal
 from fastapi import APIRouter, HTTPException, Request, Response
 from pydantic import BaseModel, ConfigDict, SecretStr, ValidationError
 
-from services import accounts
+from services import accounts, auth
 
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
@@ -69,3 +69,85 @@ async def bootstrap(request: Request, response: Response):
         raise HTTPException(exc.status_code, {"code": exc.code, "message": str(exc)}) from None
     response.headers["Cache-Control"] = "no-store"
     return asdict(account)
+
+
+class LoginIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    username: str
+    password: SecretStr
+
+
+class PasswordIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    current_password: SecretStr
+    new_password: SecretStr
+
+
+async def _read_secret_body(request: Request, model):
+    auth.check_origin(request)
+    if request.headers.get("content-type", "").split(";", 1)[0].strip().lower() != "application/json":
+        raise HTTPException(415, "请求须使用 JSON")
+    body = bytearray()
+    async for chunk in request.stream():
+        if len(body) + len(chunk) > _MAX_BODY:
+            raise HTTPException(413, "请求过大")
+        body.extend(chunk)
+    try:
+        return model.model_validate_json(bytes(body))
+    except ValidationError:
+        raise HTTPException(422, "请求格式不正确") from None
+
+
+def _auth_error(exc):
+    return HTTPException(exc.status_code, {"code": exc.code, "message": str(exc)})
+
+
+@router.post("/login")
+async def login(request: Request, response: Response):
+    data = await _read_secret_body(request, LoginIn)
+    try:
+        session = await auth.login(username=data.username, password=data.password.get_secret_value())
+    except accounts.AccountError as exc:
+        raise _auth_error(exc) from None
+    response.set_cookie(auth.COOKIE_NAME, session.token, max_age=auth.SESSION_TTL, httponly=True,
+                        secure=request.url.scheme == "https", samesite="strict", path="/")
+    response.headers["Cache-Control"] = "no-store"
+    return {"account": asdict(session.account), "expires_at": session.expires_at,
+            "csrf_token": auth.csrf_token(session.token)}
+
+
+@router.get("/me")
+async def me(request: Request, response: Response):
+    try:
+        session = await auth.require_session(request)
+    except accounts.AccountError as exc:
+        raise _auth_error(exc) from None
+    response.headers["Cache-Control"] = "no-store"
+    return {"account": asdict(session.account), "expires_at": session.expires_at,
+            "csrf_token": auth.csrf_token(request.cookies[auth.COOKIE_NAME])}
+
+
+@router.post("/logout", status_code=204)
+async def logout(request: Request):
+    try:
+        await auth.require_session(request, csrf=True)
+        await auth.logout(request.cookies[auth.COOKIE_NAME])
+    except accounts.AccountError as exc:
+        raise _auth_error(exc) from None
+    response = Response(status_code=204, headers={"Cache-Control": "no-store"})
+    response.delete_cookie(auth.COOKIE_NAME, httponly=True, secure=request.url.scheme == "https", samesite="strict")
+    return response
+
+
+@router.post("/password", status_code=204)
+async def password(request: Request):
+    try:
+        await auth.require_session(request, csrf=True)
+        data = await _read_secret_body(request, PasswordIn)
+        await auth.change_password(request.cookies[auth.COOKIE_NAME], current_password=data.current_password.get_secret_value(),
+                                   new_password=data.new_password.get_secret_value())
+    except accounts.AccountError as exc:
+        raise _auth_error(exc) from None
+    response = Response(status_code=204, headers={"Cache-Control": "no-store"})
+    response.delete_cookie(auth.COOKIE_NAME, httponly=True, secure=request.url.scheme == "https", samesite="strict")
+    return response

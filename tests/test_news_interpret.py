@@ -1,11 +1,9 @@
-from fastapi.testclient import TestClient
 import services.llm_client as llm
-from run import app
-
-client = TestClient(app)
 
 
-def test_interpret_returns_three_parts(monkeypatch):
+
+def test_interpret_returns_three_parts(monkeypatch, authenticated_client):
+    client = authenticated_client
     calls = {"n": 0}
     def fake(user_prompt, system=None, model=None, max_tokens=600):
         calls["n"] += 1
@@ -21,7 +19,8 @@ def test_interpret_returns_three_parts(monkeypatch):
     assert calls["n"] == 1
 
 
-def test_interpret_llm_error_graceful(monkeypatch):
+def test_interpret_llm_error_graceful(monkeypatch, authenticated_client):
+    client = authenticated_client
     def boom(*a, **k):
         raise RuntimeError("no creds")
     monkeypatch.setattr(llm, "call_claude", boom)
@@ -30,7 +29,8 @@ def test_interpret_llm_error_graceful(monkeypatch):
     assert r.json().get("error")
 
 
-def test_interpret_non_json_fallback(monkeypatch):
+def test_interpret_non_json_fallback(monkeypatch, authenticated_client):
+    client = authenticated_client
     monkeypatch.setattr(llm, "call_claude", lambda *a, **k: "这不是JSON只是一段话")
     r = client.post("/api/news/interpret", json={"title": "标题abc", "content": "y"})
     assert r.status_code == 200

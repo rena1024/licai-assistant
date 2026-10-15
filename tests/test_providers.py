@@ -282,16 +282,10 @@ def test_every_provider_tool_maps_to_a_real_capability():
 
 # ── HTTP 接缝 ───────────────────────────────────────────
 
-def _client():
-    from fastapi.testclient import TestClient
-    from run import app
-    return TestClient(app)
-
-
-def test_market_endpoints_say_unavailable_without_a_provider():
+def test_market_endpoints_say_unavailable_without_a_provider(authenticated_client):
     """没接入时这些路由要**成功返回** available=false, 而不是 4xx/5xx ——
     前端据此静默不渲染那几块; 报错的话会在界面上留下一串红字。"""
-    c = _client()
+    c = authenticated_client
     for url in ("/api/market/provider/plate-bidding",
                 "/api/market/provider/hot-themes",
                 "/api/market/provider/inst-position",
@@ -301,7 +295,7 @@ def test_market_endpoints_say_unavailable_without_a_provider():
         assert r.json()["available"] is False, url
 
 
-def test_settings_reports_not_installed(monkeypatch):
+def test_settings_reports_not_installed(monkeypatch, authenticated_client):
     async def _cfg(_k):
         return None
     monkeypatch.setattr("database.get_config", _cfg)
@@ -309,12 +303,12 @@ def test_settings_reports_not_installed(monkeypatch):
     # 不够 —— 路由里那个引用还指着原函数, 会真去读 app_config 表。
     monkeypatch.setattr("api.settings_routes.get_config", _cfg)
     registry.reset_cache()
-    j = _client().get("/api/settings/provider").json()
+    j = authenticated_client.get("/api/settings/provider").json()
     assert j["spec"] == "" and j["capabilities"] == [] and j["fields"] == []
     assert isinstance(j["discovered"], list)      # 没装任何 provider 时是空表, 不是缺字段
 
 
-def test_settings_offers_installed_providers_as_candidates(monkeypatch):
+def test_settings_offers_installed_providers_as_candidates(monkeypatch, authenticated_client):
     """装了包但还没选 —— 设置页要能把它列出来当候选, 省得用户手敲导入路径。"""
     async def _cfg(_k):
         return None
@@ -324,13 +318,13 @@ def test_settings_offers_installed_providers_as_candidates(monkeypatch):
                         lambda: [_FakeEP("demo", "tests.test_providers:_Demo",
                                          _FakeDist("licai-provider-demo", "0.1"))])
     registry.reset_cache()
-    j = _client().get("/api/settings/provider").json()
+    j = authenticated_client.get("/api/settings/provider").json()
     assert j["spec"] == ""                                    # 列出来 ≠ 自动启用
     assert j["discovered"] == [{"name": "demo", "spec": "tests.test_providers:_Demo",
                                 "dist": "licai-provider-demo", "version": "0.1"}]
 
 
-def test_settings_never_echoes_secret_fields(monkeypatch):
+def test_settings_never_echoes_secret_fields(monkeypatch, authenticated_client):
     """凭证字段只标形状不回显值 —— 接口里任何地方都不该出现刚存进去的那串。"""
     stored = {}
 
@@ -344,7 +338,7 @@ def test_settings_never_echoes_secret_fields(monkeypatch):
     monkeypatch.setattr("api.settings_routes.get_config", _get_cfg)
     monkeypatch.setattr("api.settings_routes.set_config", _set_cfg)
     registry.reset_cache()
-    r = _client().post("/api/settings/provider", json={"values": {"token": "s3cret-value"}})
+    r = authenticated_client.post("/api/settings/provider", json={"values": {"token": "s3cret-value"}})
     assert r.status_code == 200
     assert "s3cret-value" not in r.text
     assert stored.get("tok") == "s3cret-value"          # 确实存下去了, 只是不回显

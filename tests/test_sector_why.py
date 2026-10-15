@@ -1,16 +1,14 @@
-from fastapi.testclient import TestClient
 import services.llm_client as llm
 import api.news_routes as news
-from run import app
 
-client = TestClient(app)
 
 
 async def _fake_market_news():
     return {"items": [{"source": "财联社", "title": "铜价隔夜下跌", "content": "", "time": "2026-06-05 09:00"}]}
 
 
-def test_why_returns_two_parts(monkeypatch):
+def test_why_returns_two_parts(monkeypatch, authenticated_client):
+    client = authenticated_client
     calls = {"n": 0}
     def fake(user_prompt, system=None, model=None, max_tokens=500):
         calls["n"] += 1
@@ -28,7 +26,8 @@ def test_why_returns_two_parts(monkeypatch):
     assert calls["n"] == 1
 
 
-def test_why_llm_error_graceful(monkeypatch):
+def test_why_llm_error_graceful(monkeypatch, authenticated_client):
+    client = authenticated_client
     monkeypatch.setattr(news, "market_news", _fake_market_news)
     def boom(*a, **k): raise RuntimeError("no creds")
     monkeypatch.setattr(llm, "call_claude", boom)
@@ -36,7 +35,8 @@ def test_why_llm_error_graceful(monkeypatch):
     assert r.status_code == 200 and r.json().get("error")
 
 
-def test_why_non_json_fallback(monkeypatch):
+def test_why_non_json_fallback(monkeypatch, authenticated_client):
+    client = authenticated_client
     monkeypatch.setattr(news, "market_news", _fake_market_news)
     monkeypatch.setattr(llm, "call_claude", lambda *a, **k: "就是一段话不是JSON")
     r = client.post("/api/sector/why", json={"market": "HK", "name": "金融abc", "held": False})
