@@ -20,8 +20,9 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 async def main(apply: bool, purge_confirmed: bool) -> None:
     import aiosqlite
     from config import config
+    from services.runtime_paths import database_path
 
-    async with aiosqlite.connect(config.db_path) as db:
+    async with aiosqlite.connect(database_path(config.db_path)) as db:
         db.row_factory = aiosqlite.Row
         async with db.execute("SELECT id FROM external_assets") as cur:
             live = {r["id"] for r in await cur.fetchall()}

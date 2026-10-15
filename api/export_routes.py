@@ -87,11 +87,10 @@ async def export_all():
 
 def _backup_current_db() -> Path:
     """导入前先复制当前 DB 到 backups/, 失败时可手动还原."""
-    src = Path(config.db_path)
-    backup_dir = src.parent / "backups"
-    backup_dir.mkdir(exist_ok=True)
+    from services.runtime_paths import database_path, get_runtime_paths
+    src = database_path(config.db_path)
     ts = datetime.now().strftime("%Y%m%d-%H%M%S")
-    dst = backup_dir / f"pre-import-{ts}.db"
+    dst = get_runtime_paths().file("backups", f"pre-import-{ts}.db")
     shutil.copy2(src, dst)
     return dst
 

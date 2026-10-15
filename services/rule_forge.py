@@ -177,7 +177,8 @@ def render_rules(rules: list[dict]) -> str:
 async def _conn():
     import aiosqlite
     from config import config as _cfg
-    return await aiosqlite.connect(_cfg.db_path)
+    from services.runtime_paths import database_path
+    return await aiosqlite.connect(database_path(_cfg.db_path))
 
 
 async def fetch_messages() -> list[dict]:
@@ -238,7 +239,8 @@ def active_rules_sync() -> list[dict]:
     try:
         import sqlite3
         from config import config as _cfg
-        con = sqlite3.connect(_cfg.db_path, timeout=1.0)
+        from services.runtime_paths import database_path
+        con = sqlite3.connect(database_path(_cfg.db_path), timeout=1.0)
         try:
             rows = con.execute("SELECT title, body FROM prompt_rule "
                                "WHERE status = 'active' ORDER BY id").fetchall()

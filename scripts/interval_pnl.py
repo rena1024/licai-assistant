@@ -22,7 +22,8 @@ async def main(start: str) -> None:
     import aiosqlite
     from config import config
     from database import list_portfolio_snapshots
-    DB_PATH = config.db_path
+    from services.runtime_paths import database_path
+    DB_PATH = database_path(config.db_path)
 
     snaps = {r["snap_date"]: json.loads(r["by_asset"] or "{}")
              for r in await list_portfolio_snapshots(limit=730)}

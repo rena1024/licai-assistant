@@ -37,6 +37,8 @@ import shutil
 from urllib.parse import urlparse
 
 import requests
+import platform
+from services.runtime_paths import is_test_profile
 
 logger = logging.getLogger(__name__)
 
@@ -289,7 +291,7 @@ def _resolve_auth() -> tuple[str, bool]:
     if _cached_token:
         return _cached_token, True
 
-    if os.uname().sysname == "Darwin":
+    if not is_test_profile() and platform.system() == "Darwin":
         try:
             result = subprocess.run(
                 ["security", "find-generic-password", "-s", "Claude Code-credentials", "-w"],
@@ -770,6 +772,8 @@ def _find_claude_cli() -> tuple[str | None, str | None]:
 
 def _call_via_cli(user_prompt: str, system: str | None, model: str, max_tokens: int) -> str:
     """Fallback: call Claude via the local CLI binary (refreshes OAuth internally)."""
+    if is_test_profile():
+        raise RuntimeError("测试模式禁止使用本机 Claude CLI 凭证")
     node_path, claude_path = _find_claude_cli()
     if not node_path or not claude_path:
         raise RuntimeError("Claude CLI binary not found; cannot use CLI fallback.")

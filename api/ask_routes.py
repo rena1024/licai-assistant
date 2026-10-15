@@ -10,14 +10,13 @@ from fastapi import APIRouter
 from fastapi.responses import StreamingResponse, FileResponse, Response
 from pydantic import BaseModel
 
-from config import config
 from services.stock_agent import ask_stock, ask_stock_stream
 from services import ask_runs
 from database import (create_ask_session, add_ask_message, list_ask_sessions,
                       get_ask_session, delete_ask_session)
+from services.runtime_paths import get_runtime_paths
 
-# 会话图片落盘目录(跟 DB 同级), 存压缩光栅图文件, DB 只留 URL — 不把 base64 塞进库
-_MEDIA_DIR = os.path.join(os.path.dirname(os.path.abspath(config.db_path)) or ".", "ask_media")
+# 会话图片存于运行目录的 media，DB 只留 URL，不把 base64 塞进库。
 # 只允许光栅图; 明确排除 SVG(可含脚本 → 存储型 XSS)及其它可执行/未知类型
 _ALLOWED_IMG = {"jpeg": ("jpg", "image/jpeg"), "jpg": ("jpg", "image/jpeg"),
                 "png": ("png", "image/png"), "gif": ("gif", "image/gif"),
@@ -32,7 +31,6 @@ def _persist_images(meta: Optional[dict]) -> Optional[dict]:
     imgs = meta.get("images")
     if not isinstance(imgs, list) or not imgs:
         return meta
-    os.makedirs(_MEDIA_DIR, exist_ok=True)
     out = []
     for s in imgs:
         if not isinstance(s, str) or not s:
@@ -48,7 +46,7 @@ def _persist_images(meta: Optional[dict]) -> Optional[dict]:
                     continue
                 ext = _ALLOWED_IMG[subtype][0]
                 name = f"{uuid.uuid4().hex}.{ext}"
-                with open(os.path.join(_MEDIA_DIR, name), "wb") as f:
+                with get_runtime_paths().file("media", name).open("wb") as f:
                     f.write(base64.b64decode(b64))
                 out.append(f"/api/ask/image/{name}")
             except Exception:
@@ -212,7 +210,7 @@ async def get_ask_image(name: str):
     safe = os.path.basename(name)
     ext = safe.rsplit(".", 1)[-1].lower() if "." in safe else ""
     ct = _EXT_CT.get(ext)
-    path = os.path.join(_MEDIA_DIR, safe)
+    path = get_runtime_paths().validate(get_runtime_paths().media / safe)
     if not ct or not os.path.isfile(path):    # 只服务白名单光栅图
         return Response(status_code=404)
     return FileResponse(path, media_type=ct, headers={"X-Content-Type-Options": "nosniff"})

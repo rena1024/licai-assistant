@@ -360,9 +360,9 @@ def test_resolve_auth_keychain_success(mock_run):
     mock_run.return_value.returncode = 0
     mock_run.return_value.stdout = '{"claudeAiOauth":{"accessToken":"keychain-token-123"}}'
 
-    # Only test on Darwin or mock os.uname
-    with mock.patch("os.uname") as mock_uname:
-        mock_uname.return_value.sysname = "Darwin"
+    # 仅在此用例显式模拟生产模式，凭证读取仍由 fake subprocess 完全接管。
+    with mock.patch.object(llm, "is_test_profile", return_value=False), \
+            mock.patch("platform.system", return_value="Darwin"):
         token, is_oauth = llm._resolve_auth()
         assert token == "keychain-token-123"
         assert is_oauth is True

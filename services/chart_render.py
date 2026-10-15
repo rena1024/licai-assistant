@@ -16,10 +16,9 @@ from matplotlib import font_manager       # noqa: E402
 import pandas as pd                        # noqa: E402
 import mplfinance as mpf                   # noqa: E402
 
-from config import config                  # noqa: E402
+from services.runtime_paths import get_runtime_paths  # noqa: E402
 
 _lock = threading.Lock()   # matplotlib/pyplot 非线程安全, 同一进程串行渲染
-_MEDIA_DIR = os.path.join(os.path.dirname(os.path.abspath(config.db_path)) or ".", "ask_media")
 
 # 深色主题配色(对齐前端 --color-*)
 _BG = "#15171c"; _GRID = "#23262e"; _FG = "#cdd0d6"
@@ -217,9 +216,8 @@ def render_trend_chart(bars: list, *, code: str = "", name: str = "",
 
 
 def save_png(png: bytes) -> str:
-    """把 PNG 落盘到 ask_media, 返回前端可访问的 URL(/api/ask/image/<uuid>.png)。"""
-    os.makedirs(_MEDIA_DIR, exist_ok=True)
+    """把 PNG 落盘到运行目录的 media，返回前端可访问的 URL。"""
     name = f"chart_{uuid.uuid4().hex}.png"
-    with open(os.path.join(_MEDIA_DIR, name), "wb") as f:
+    with get_runtime_paths().file("media", name).open("wb") as f:
         f.write(png)
     return f"/api/ask/image/{name}"

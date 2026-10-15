@@ -94,6 +94,8 @@ async def main() -> int:
     import config
     if args.db:
         config.config.db_path = args.db
+    from services.runtime_paths import database_path
+    config.config.db_path = str(database_path(config.config.db_path))
     print(f"账本={config.config.db_path}\n")
 
     from services import rule_forge as rf

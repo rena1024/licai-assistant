@@ -2,6 +2,7 @@
 from __future__ import annotations
 import aiosqlite
 from config import config
+from services.runtime_paths import database_path, get_runtime_paths, LAYOUT_VERSION
 
 # 观察池的默认分组。它是一个真实分组(watchlist_group 里有行), 不是"没有分组" ——
 # 一只票可以同时在「自选」和「金矿」里。加进观察池时自动落这个组; 取消到一个组都不剩时
@@ -413,15 +414,25 @@ CREATE INDEX IF NOT EXISTS idx_prompt_rule_status ON prompt_rule(status, id);
 
 
 async def get_db() -> aiosqlite.Connection:
-    db = await aiosqlite.connect(config.db_path)
+    path = database_path(config.db_path)
+    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    if not path.exists():
+        path.touch(mode=0o600, exist_ok=True)
+    db = await aiosqlite.connect(path)
     db.row_factory = aiosqlite.Row
     return db
 
 
 async def init_db():
+    paths = get_runtime_paths()
+    if paths.profile != "test":
+        paths.check_legacy_database()
+        paths.check_database(database_path(config.db_path))
     db = await get_db()
     try:
         await db.executescript(SCHEMA)
+        await db.execute("CREATE TABLE IF NOT EXISTS runtime_metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
+        await db.execute("INSERT OR IGNORE INTO runtime_metadata VALUES ('layout_version', ?)", (LAYOUT_VERSION,))
         # Migration: add trade_date to position_actions if missing
         cursor = await db.execute("PRAGMA table_info(position_actions)")
         cols = {row[1] for row in await cursor.fetchall()}

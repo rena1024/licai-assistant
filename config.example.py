@@ -8,6 +8,8 @@ from dataclasses import dataclass, field
 @dataclass
 class Config:
     # --- 数据库 ---
+    # 默认定位到 LICAI_DATA_DIR/portfolio.db（未设置时为项目的 runtime-data/）。
+    # 运行目录必须通过环境变量配置，不再把历史数据库路径填到这里。
     db_path: str = "portfolio.db"
 
     # --- 行情刷新 ---

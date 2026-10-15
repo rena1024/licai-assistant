@@ -160,7 +160,8 @@ async def record(tool: str, args: dict, out) -> None:
         # 用单例 config, 不是 Config 类 —— 类属性只是 dataclass 的默认值, 改它不生效,
         # 会静默连到默认的 portfolio.db(真实账本)。这个坑今天踩了三次。
         from config import config as _cfg
-        async with aiosqlite.connect(_cfg.db_path) as db:
+        from services.runtime_paths import database_path
+        async with aiosqlite.connect(database_path(_cfg.db_path)) as db:
             await db.execute(
                 """INSERT INTO tool_gap (tool, kind, market, hits, detail, sample)
                    VALUES (?, ?, ?, 1, ?, ?)
@@ -177,7 +178,8 @@ async def report(min_hits: int = 1) -> list[dict]:
     """读台账, 按命中次数倒序。"""
     import aiosqlite
     from config import config as _cfg
-    async with aiosqlite.connect(_cfg.db_path) as db:
+    from services.runtime_paths import database_path
+    async with aiosqlite.connect(database_path(_cfg.db_path)) as db:
         cur = await db.execute(
             """SELECT tool, kind, market, hits, detail, sample, first_seen, last_seen
                FROM tool_gap WHERE hits >= ? ORDER BY hits DESC, tool""", (min_hits,))

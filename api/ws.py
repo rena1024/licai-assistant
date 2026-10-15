@@ -10,6 +10,7 @@ from services.market_data import (get_realtime_quotes, is_trading_day_active, ma
                                   split_stock_code)
 from services import feishu_notify
 from config import config
+from services.runtime_paths import database_path, get_runtime_paths
 
 router = APIRouter()
 
@@ -104,8 +105,9 @@ async def backup_loop():
     from datetime import datetime, timezone, timedelta
     from pathlib import Path
 
-    backup_dir = Path(config.db_path).parent / "backups"
-    backup_dir.mkdir(exist_ok=True)
+    paths = get_runtime_paths()
+    paths.prepare()
+    backup_dir = paths.backups
 
     while True:
         try:
@@ -115,9 +117,9 @@ async def backup_loop():
             hour = cst_now.hour
 
             if hour == 20 and today != _backup_done_date:
-                src = Path(config.db_path)
+                src = database_path(config.db_path)
                 if src.exists():
-                    dst = backup_dir / f"portfolio_{today}.db"
+                    dst = get_runtime_paths().file("backups", f"portfolio_{today}.db")
                     shutil.copy2(str(src), str(dst))
                     _backup_done_date = today
                     print(f"[backup] Database backed up to {dst}")

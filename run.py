@@ -7,6 +7,7 @@ import asyncio
 import os
 import warnings
 from contextlib import asynccontextmanager
+from services.runtime_paths import get_runtime_paths, load_runtime_env
 
 # macOS 系统 Python 3.9 用 LibreSSL 2.8.3, urllib3 v2 会嗷嗷叫。无害, 屏蔽
 warnings.filterwarnings("ignore", message=".*OpenSSL.*", module="urllib3")
@@ -15,19 +16,8 @@ warnings.filterwarnings("ignore", message=".*OpenSSL.*", module="urllib3")
 for _k in ("HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy", "ALL_PROXY", "all_proxy", "NO_PROXY", "no_proxy"):
     os.environ.pop(_k, None)
 
-# 极简 .env 加载(不引第三方依赖): 只认 KEY=VALUE 行, 已在 os.environ 里的不覆盖。
-# 用于扩展数据源凭证等 secrets —— .env 被 .gitignore 挡着, 不进库。
-_envf = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
-if os.path.exists(_envf):
-    with open(_envf, encoding="utf-8") as _f:
-        for _line in _f:
-            _line = _line.strip()
-            if not _line or _line.startswith("#") or "=" not in _line:
-                continue
-            _key, _val = _line.split("=", 1)
-            _key, _val = _key.strip(), _val.strip().strip('"').strip("'")
-            if _key and _key not in os.environ:
-                os.environ[_key] = _val
+# 测试模式不会读取 .env；运行时配置只从持久目录读取。
+load_runtime_env(get_runtime_paths())
 
 import uvicorn
 from fastapi import FastAPI
@@ -76,7 +66,15 @@ async def _symbol_dict_prewarm():
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    paths = get_runtime_paths()
+    if paths.profile != "test":
+        paths.check_legacy_database()
+    paths.prepare()
     await init_db()
+    if paths.profile == "test":
+        # 不探测代理、不恢复真实凭证、不预热数据、不创建生产后台任务。
+        yield
+        return
     # 上一个进程留下的"在跑"的 agent 轮次: 进程一没那些 task 就不存在了, 留着 running
     # 会让界面一直转。标成 interrupted, 过程留着(不自动重跑 —— 重跑要再烧一遍 token)。
     try:

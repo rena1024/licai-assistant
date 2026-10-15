@@ -36,9 +36,8 @@ def _fmt(n) -> str:
 def _dump(row: dict) -> str:
     """把失败用例的完整问答写到 logs/(已 gitignore, 答案里可能带持仓数字)。"""
     try:
-        d = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "logs")
-        os.makedirs(d, exist_ok=True)
-        p = os.path.join(d, f"eval-fail-{row['name']}.txt")
+        from services.runtime_paths import get_runtime_paths
+        p = get_runtime_paths().file("logs", f"eval-fail-{row['name']}.txt")
         with open(p, "w", encoding="utf-8") as f:
             f.write(f"# {row['name']}\n问: {row.get('question', '')}\n")
             f.write(f"工具: {', '.join(row.get('tools') or [])}\n")
@@ -94,14 +93,6 @@ async def main():
     ap.add_argument("--db", default="portfolio.demo.db")
     args = ap.parse_args()
 
-    import config
-    if os.path.exists(args.db):
-        # 必须改单例 config, 不是 Config 类属性 —— 类属性只是 dataclass 的默认值,
-        # 单例早已实例化, 改它才生效。改错了会静默跑在真实账本上(真实持仓进 prompt)。
-        config.config.db_path = args.db
-    else:
-        print(f"! 找不到 {args.db}, 用默认账本(真实持仓会进 prompt)")
-
     from evals.cases import CASES
     picked = [c for c in CASES if c["name"].startswith(args.case)]
     if args.list:
@@ -112,6 +103,17 @@ async def main():
     if not picked:
         print(f"没有匹配 {args.case!r} 的用例")
         return 2
+
+    import config
+    from pathlib import Path
+    from services.runtime_paths import get_runtime_paths
+    paths = get_runtime_paths()
+    candidate = Path(args.db)
+    path = paths.validate(candidate if candidate.is_absolute() else paths.root / candidate)
+    if not path.is_file():
+        print(f"找不到评测数据库 {path}；已停止，不会回退到个人账本。")
+        return 2
+    config.config.db_path = str(path)
 
     print(f"账本={config.config.db_path}  用例={len(picked)}\n")
     rows = []

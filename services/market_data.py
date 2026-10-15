@@ -32,6 +32,7 @@ import akshare as ak
 import pandas as pd
 
 from config import config
+from services.runtime_paths import get_runtime_paths
 
 # In-memory cache: {key: (data, timestamp)}
 _cache: dict[str, tuple] = {}
@@ -97,21 +98,23 @@ def get_fx_info(currency: str) -> dict:
     return {"rate": fallback, "source": "fallback", "time": ""}
 
 
-_FX_FILE = Path(__file__).resolve().parents[1] / "fx_last.json"
+def _fx_file() -> Path:
+    return get_runtime_paths().file("cache", "fx_last.json")
 
 
 def _fx_remember(currency: str, rate: float) -> None:
     try:
-        d = json.loads(_FX_FILE.read_text()) if _FX_FILE.exists() else {}
+        path = _fx_file()
+        d = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
         d[currency] = {"rate": rate, "at": datetime.now().strftime("%Y-%m-%d %H:%M")}
-        _FX_FILE.write_text(json.dumps(d))
+        path.write_text(json.dumps(d), encoding="utf-8")
     except Exception:  # noqa: BLE001  落盘失败不影响取价
         pass
 
 
 def _fx_recall(currency: str) -> dict | None:
     try:
-        return json.loads(_FX_FILE.read_text()).get(currency)
+        return json.loads(_fx_file().read_text(encoding="utf-8")).get(currency)
     except Exception:  # noqa: BLE001
         return None
 
@@ -208,7 +211,7 @@ def fx_history(currency: str) -> dict[str, float]:
 
 def _fx_history_disk() -> dict:
     try:
-        return json.loads(_FX_FILE.read_text()).get("history") or {}
+        return json.loads(_fx_file().read_text(encoding="utf-8")).get("history") or {}
     except Exception:  # noqa: BLE001
         return {}
 
@@ -251,9 +254,10 @@ def _fx_history_fetch() -> dict:
             out = {}
         if out:
             try:
-                d = json.loads(_FX_FILE.read_text()) if _FX_FILE.exists() else {}
+                path = _fx_file()
+                d = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
                 d["history"] = out
-                _FX_FILE.write_text(json.dumps(d))
+                path.write_text(json.dumps(d), encoding="utf-8")
             except Exception:  # noqa: BLE001  落盘失败不影响取数
                 pass
             return out

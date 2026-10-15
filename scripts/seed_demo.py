@@ -26,9 +26,12 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-DB_PATH = ROOT / "portfolio.db"
-DEMO_PATH = ROOT / "portfolio.demo.db"
-BACKUP_PATH = ROOT / "portfolio.real.db.bak"
+from services.runtime_paths import get_runtime_paths
+
+_runtime = get_runtime_paths()
+DB_PATH = _runtime.db
+DEMO_PATH = _runtime.root / "portfolio.demo.db"
+BACKUP_PATH = _runtime.root / "portfolio.real.db.bak"
 
 
 # ---- 演示数据定义 ----

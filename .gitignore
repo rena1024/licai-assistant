@@ -1,4 +1,6 @@
 # --- Personal data (NEVER COMMIT) ---
+runtime-data/
+.superpowers/
 portfolio.db
 portfolio.db-*
 backups/

@@ -29,6 +29,8 @@ async def main() -> int:
     import config
     if args.db:
         config.config.db_path = args.db
+    from services.runtime_paths import database_path
+    config.config.db_path = str(database_path(config.config.db_path))
 
     if args.clear:
         import aiosqlite

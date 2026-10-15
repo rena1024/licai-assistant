@@ -19,11 +19,17 @@ import json
 import time
 from datetime import date
 from pathlib import Path
+from services.runtime_paths import get_runtime_paths
 
 import numpy as np
 
 WIN = 120
-_PATH = Path(__file__).resolve().parent.parent / "data" / "fund_nav_model.json"
+
+
+def _model_path() -> Path:
+    return get_runtime_paths().file("cache", "fund_nav_model.json")
+
+
 FACTORS = {"沪深300": ("cn", "sh000300"), "中证1000": ("cn", "sh000852"), "创业板": ("cn", "sz399006"),
            "科创50": ("cn", "sh000688"), "恒生": ("cn", "hkHSI"), "恒生科技": ("cn", "hkHSTECH"),
            "纳指100": ("us", ".NDX"), "标普500": ("us", ".INX"), "费城半导体": ("us", "SOXX"), "沪金": ("cn", "nf_AU0")}
@@ -38,7 +44,7 @@ def _load() -> dict:
     global _models
     if _models is None:
         try:
-            _models = json.loads(_PATH.read_text())
+            _models = json.loads(_model_path().read_text(encoding="utf-8"))
         except Exception:  # noqa: BLE001
             _models = {}
     return _models
@@ -46,8 +52,7 @@ def _load() -> dict:
 
 def _save():
     try:
-        _PATH.parent.mkdir(parents=True, exist_ok=True)
-        _PATH.write_text(json.dumps(_models, ensure_ascii=False))
+        _model_path().write_text(json.dumps(_models, ensure_ascii=False), encoding="utf-8")
     except Exception as e:  # noqa: BLE001
         print(f"[fund-nav-model] save failed: {e}")
 
