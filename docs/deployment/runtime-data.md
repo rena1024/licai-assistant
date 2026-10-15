@@ -75,3 +75,12 @@ LLM 客户端不读取 Keychain、不回退到本机 Claude CLI。
 
 `evals/run.py` 是明确需要真实工具和模型额度的人工评测入口，不属于上述离线回归命令。
 本轮未运行真实模型请求、外发通知或部署操作。
+
+## MiniRacer/V8 启动兼容性
+
+macOS/Python 3.13 的已安装 MiniRacer 在行情线程首次并发创建 JavaScript 上下文时，
+可能触发 `Check failed: !pool->IsInitialized()` 并终止进程。
+应用现于生产启动期间串行预热一个本地上下文，再开始处理请求或启动后台任务；
+预热只计算常量，不请求外部数据。测试模式保持原有隔离行为。
+无需为此更换数据目录或清空数据库，按原命令重启即可。
+验证环境、原生复现和回归结果见[启动兼容性记录](../../tasks/evidence/js-runtime.md)。

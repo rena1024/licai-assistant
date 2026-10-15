@@ -55,6 +55,8 @@
 
 **执行状态：** 已完成（2026-10-15）；实现提交 `c63f1fa`，详见 [A02 验收记录](../../../tasks/evidence/a02.md)及[账号使用说明](../../deployment/accounts.md)。D03 基础审计同步接入；登录/改密页面、完整会话及用户管理界面仍按 A03/A10 实施。
 
+**启动兼容跟进：** 公共代理配置误拦截修复后，另在请求/后台任务开始前串行预热 MiniRacer 首个上下文，解决 macOS/Python 3.13 的原生并发初始化崩溃。最新全量回归 803 项通过；原生冷进程验证与范围见[兼容性记录](../../../tasks/evidence/js-runtime.md)，不因此标记其他平台任务通过。
+
 **依赖：** A01。  **输入：** 已验收依赖接口及需求对应规则。
 
 **文件：** services/accounts.py；api/auth_routes.py；database.py；scripts/admin_recovery.py。新增测试：`tests/test_account_bootstrap.py`；涉及交互时补 `frontend/src/__tests__/account_bootstrap.test.jsx`。
