@@ -1,7 +1,7 @@
-# 账号初始化与本机恢复（A02）
+# 账号初始化、登录与本机恢复（A02／A03）
 
-本阶段提供账号服务、初始化 API 和本机恢复命令；登录/改密页面及完整会话交互在 A03 接入。
-持仓等业务权限仍待 A04～A10 完成，因此 A02 完成不代表多用户版本可以投入日常使用。
+本阶段已提供初始化、登录、改密页面，固定 30 天的服务端会话及本机恢复命令。
+持仓等业务权限仍待 A04～A10 完成，因此 A03 完成不代表多用户版本可以投入日常使用。
 用户管理页面在 A10 接入，当前没有临时开放的、接受客户端管理员 ID 的用户管理 API。
 
 ## 初始化凭据
@@ -59,6 +59,30 @@ python scripts/admin_recovery.py bootstrap-token --renew
 其他配置（例如私人通知凭证）以及已修改的券商模板仍会阻止初始化。
 公开行情缓存可保留。账号结构记录 `account_schema_version=1`；不兼容版本会停止初始化/恢复。
 
+## 登录、会话与切换账号
+
+打开应用时先检查初始化状态；未初始化则显示管理员创建页，已初始化则显示登录页。
+登录后顶部显示当前账号，可修改密码或“退出 / 切换账号”。普通用户使用临时密码时，
+只能进入改密页或退出，不能访问业务 API 或建立 WebSocket。
+
+- 登录建立独立随机会话，固定 30 天后过期；状态检查、轮询和刷新不延长期限。
+- 多设备会话可共存；退出仅撤销当前设备会话，改密／管理员重置／本机恢复撤销该用户全部旧会话。
+- 修改密码须验证当前密码，新密码不能与当前相同；成功后重新登录。
+- 停用账号拒绝登录和现有 HTTP 会话；完整停用任务及 WebSocket 实时失效由 A09／A10 完成。
+- 切换账号会重新加载文档，重建页面与模块缓存；失效时清空 GET 预取及持仓分析本地缓存，
+  中止未完成请求／流和 WebSocket 心跳／重连，拒绝前账号迟到响应。
+- 同一浏览器不同标签页共享 Cookie；账号变化广播到其他标签页，让它们重新检查身份。
+
+会话原值只放在 `HttpOnly`、`SameSite=Strict` Cookie，数据库保存 SHA-256 摘要。
+HTTPS 使用 `Secure` Cookie；本机／局域网 HTTP 使用非 Secure Cookie。
+CSRF 校验值仅保存在页面内存，写请求须同时通过该校验及 Origin 来源检查；业务响应禁止缓存。
+前后端应同源部署。Vite 开发时通过已有 `/api` 和 `/ws` 代理，来源按浏览器访问地址校验。
+
+HTTP 接口：`POST /api/auth/login`、`GET /api/auth/me`、`POST /api/auth/logout`、
+`POST /api/auth/password`。认证错误仅返回固定提示，不回显密码或初始化凭据。
+`request.state.user` 为服务端构造的 `UserContext(user_id, session_id, auth_version)`，
+后续业务归属接口沿用它，不接受客户端自报身份。
+
 ## 本机恢复管理员密码
 
 在部署机器、项目目录、同一虚拟环境和同一 `LICAI_DATA_DIR` 下执行：
@@ -73,7 +97,7 @@ python scripts/admin_recovery.py recover
 
 1. 唯一管理员保持原 ID 和稳定 UUID，原密码哈希被替换。
 2. `auth_version` 增加、该管理员所有旧设备会话撤销，其他用户会话不受影响。
-3. 标记下次登录必须改密，记录重置时间；实际登录/提醒展示将在后续任务接入。
+3. 标记下次登录必须改密，记录重置时间；网页登录后先进入改密页，本人消息提醒随后续任务接入。
 4. 资产、交易和历史不清空、不改写；写入一条不含密码的审计记录。
 
 普通用户临时密码创建/重置由账号服务提供，调用时实时检查管理员身份。
@@ -85,7 +109,7 @@ python scripts/admin_recovery.py recover
 
 ## 审计与验证边界
 
-初始化、生成/轮换凭据、创建用户、密码重置和本机恢复，从首次实现起记录结构化审计。
+初始化、生成/轮换凭据、创建用户、登录、退出、改密、密码重置和本机恢复，从首次实现起记录结构化审计。
 成功审计与账号变更同事务，审计失败则账号变更回滚；拒绝操作记录固定原因代码。
 审计只接收动作、结果、内部对象 ID、原因代码和时间，不接收用户名、密码、Token、正文或异常对象。
 运行日志保留、Trace 到期和审计清理策略在 D03 后续完成，本轮只完成其基础写入部分。
@@ -93,7 +117,9 @@ python scripts/admin_recovery.py recover
 离线验证命令：
 
 ```bash
-python -m pytest tests/test_account_bootstrap.py -q
+python -m pytest tests/test_account_bootstrap.py tests/test_sessions.py -q
+npm --prefix frontend test -- --run
+npm --prefix frontend run build
 python -m pytest -q
 ```
 

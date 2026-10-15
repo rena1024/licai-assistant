@@ -13,7 +13,7 @@
 
 [![Python](https://img.shields.io/badge/Python-3.9+-c8a876?style=flat-square&labelColor=201f2a&logo=python&logoColor=c8a876)](https://www.python.org/) [![FastAPI](https://img.shields.io/badge/FastAPI-backend-7a9b8e?style=flat-square&labelColor=201f2a&logo=fastapi&logoColor=7a9b8e)](https://fastapi.tiangolo.com/) [![React](https://img.shields.io/badge/React_+_Vite-frontend-85a0b4?style=flat-square&labelColor=201f2a&logo=react&logoColor=85a0b4)](https://react.dev/) [![SQLite](https://img.shields.io/badge/SQLite-local--first-d4a05c?style=flat-square&labelColor=201f2a&logo=sqlite&logoColor=d4a05c)](https://www.sqlite.org/) [![PWA](https://img.shields.io/badge/PWA-installable-5fa86c?style=flat-square&labelColor=201f2a)](#技术栈)
 
-**没有云端** · **没有账号** · **数据全部跑在你自己的机器上**
+**本机部署** · **账号登录** · **数据保存在你自己的机器上**
 
 SQLite 单文件存储，你随时可以拷走、删掉、备份
 
@@ -107,7 +107,8 @@ python run.py
 第一次启动会在 `runtime-data/` 创建空 SQLite (`portfolio.db`)。可通过环境变量
 `LICAI_DATA_DIR` 指定持久目录，详见[运行目录与隔离测试](docs/deployment/runtime-data.md)。
 发现项目根目录已有旧库时会停止初始化；保留旧库，显式指定新的空目录继续，不自动迁移或清空历史数据。
-首次初始化凭据及本机管理员恢复见[账号初始化与恢复说明](docs/deployment/accounts.md)；登录页面与完整多用户隔离仍按实施计划分阶段接入。
+首次打开页面可凭本机一次性凭据创建管理员，再登录使用；临时密码首次登录须修改。
+登录、会话及本机恢复见[账号使用说明](docs/deployment/accounts.md)。完整多用户业务隔离仍待 A04～A10 验收，当前开发分支尚不适合多人日常使用。
 
 ### 演示模式（不录数据先看效果）
 
