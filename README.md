@@ -107,6 +107,7 @@ python run.py
 第一次启动会在 `runtime-data/` 创建空 SQLite (`portfolio.db`)。可通过环境变量
 `LICAI_DATA_DIR` 指定持久目录，详见[运行目录与隔离测试](docs/deployment/runtime-data.md)。
 发现项目根目录已有旧库时会停止初始化；保留旧库，显式指定新的空目录继续，不自动迁移或清空历史数据。
+首次初始化凭据及本机管理员恢复见[账号初始化与恢复说明](docs/deployment/accounts.md)；登录页面与完整多用户隔离仍按实施计划分阶段接入。
 
 ### 演示模式（不录数据先看效果）
 

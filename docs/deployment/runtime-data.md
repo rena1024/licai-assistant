@@ -48,7 +48,7 @@ $env:LICAI_DATA_DIR = Join-Path $env:LOCALAPPDATA 'licai'
 - 新建目录在 POSIX 系统请求权限 `0700`，新建业务数据库请求 `0600`；既有目录权限和 Windows ACL 仍由部署者管理。
 - 默认目录已加入 `.gitignore`。自定义目录应选在代码库外，数据库、图片、凭证和备份均不要提交。
 
-本轮只完成 A01，不代表账号隔离或完整 P0 已交付。旧 `install.sh`/launchd 系统日志路径
+本文说明 A01 运行目录保护；账号基础与本机恢复见 [A02 说明](accounts.md)，完整账号隔离和 P0 尚未交付。旧 `install.sh`/launchd 系统日志路径
 尚未迁移，后续 D03/D06 统一；本轮不会安装服务或修改系统设置。
 一致性备份、恢复维护态和费用隔离分别由 D01/D02 实现。
 
