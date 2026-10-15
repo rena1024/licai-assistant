@@ -64,8 +64,8 @@
 - [x] 新增 `test_bootstrap_race_has_one_admin`，以及固定时钟下凭据过期/轮换、两名普通用户越权、密码恢复撤销多设备旧会话和保留业务数据等用例；仅使用隔离数据库、合成凭据与伪造外部输入。
 - [x] 实现前运行 `venv/bin/python -m pytest tests/test_account_bootstrap.py -q`，初始 14 项因账号/恢复模块缺失失败；凭据轮换持久化失败、账号版本不兼容和恢复误触发迁移等边界另有先失败后通过记录。
 - [x] 新增 users/sessions/bootstrap_state、Argon2 密码哈希、一次性本机凭据、初始化 API、服务端普通用户创建/重置及隐藏输入的恢复 CLI；账号写入与基础审计同事务。凭据文件按代保存，恢复不运行业务迁移；不自动认领无归属业务数据。
-- [x] `venv/bin/python -m pytest tests/test_account_bootstrap.py -q`：22 项通过。本项无前端变更，未运行前端测试/构建；Python 3.12、Windows、Docker 及真实外部服务仍未实测，不据此标记相应任务通过。
-- [x] 完成独立审查并修复凭据轮换失败问题；另修复本机恢复误触发业务迁移。全量 `venv/bin/python -m pytest -q`：799 项通过、16 条既有弃用警告；差异检查通过，提交编号记录于验收记录与执行清单。
+- [x] `venv/bin/python -m pytest tests/test_account_bootstrap.py -q`：后续修复后 24 项通过。本项无前端变更，未运行前端测试/构建；Python 3.12、Windows、Docker 及真实外部服务仍未实测，不据此标记相应任务通过。
+- [x] 完成独立审查并修复凭据轮换失败问题；另修复本机恢复误触发业务迁移。后续修复公共代理配置被误判为私人历史数据的问题（`548c63f`），覆盖重复启动及私人配置仍被拒绝；全量 `venv/bin/python -m pytest -q`：801 项通过、16 条既有弃用警告；差异检查通过，详情见验收记录与执行清单。
 
 ### A03：登录会话与前端账号切换
 
