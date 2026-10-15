@@ -124,9 +124,11 @@ async def _assert_fresh_business(db) -> None:
         # 表名来自常量白名单，不接受外部输入。
         if await (await db.execute(f'SELECT 1 FROM "{table}" LIMIT 1')).fetchone():
             raise AccountError("legacy_data")
-    # 旧初始化代码即使在空库也会写这一个迁移标记；不能把它误判成用户配置。
+    # 空库会生成迁移标记，A01 启动也可能自动保存公共代理；两者均无个人归属。
+    # 这里只放行明确的系统键，其他配置仍按可能含私人凭证处理。
     config_row = await (await db.execute(
-        "SELECT 1 FROM app_config WHERE NOT (key='watchlist_default_group_filled' AND value='1') LIMIT 1"
+        "SELECT 1 FROM app_config WHERE NOT ((key='watchlist_default_group_filled' AND value='1') "
+        "OR key='network_proxy') LIMIT 1"
     )).fetchone()
     if config_row:
         raise AccountError("legacy_data")

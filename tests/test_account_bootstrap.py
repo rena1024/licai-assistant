@@ -387,3 +387,44 @@ def test_cancel_after_token_commit_keeps_current_credential_file(account_db, mon
         await accounts.bootstrap_admin(token=path.read_text().strip(), username="Admin", password=PASSWORD, now=NOW + 1)
 
     asyncio.run(exercise())
+
+
+def test_system_proxy_does_not_block_repeated_first_startup(account_db, monkeypatch):
+    from dataclasses import replace
+    from database import set_config
+    from services.runtime_paths import get_runtime_paths
+    import run
+
+    asyncio.run(set_config("network_proxy", "http://127.0.0.1:17890"))
+    original = rows(account_db, "SELECT * FROM app_config ORDER BY key")
+    paths = replace(get_runtime_paths(), profile="production")
+    monkeypatch.setattr(run, "get_runtime_paths", lambda: paths)
+
+    async def forbid_restoring_external_settings(*args, **kwargs):
+        raise AssertionError("初始化前不应恢复外部配置或探测代理")
+
+    monkeypatch.setattr(run, "get_config", forbid_restoring_external_settings)
+
+    async def exercise():
+        async with run.lifespan(run.app):
+            first = rows(account_db, "SELECT * FROM bootstrap_state")
+            assert len(first) == 1
+        async with run.lifespan(run.app):
+            assert rows(account_db, "SELECT * FROM bootstrap_state") == first
+
+    asyncio.run(exercise())
+    assert rows(account_db, "SELECT * FROM app_config ORDER BY key") == original
+    assert not rows(account_db, "SELECT id FROM users")
+
+
+def test_private_configuration_still_blocks_bootstrap_with_system_proxy(account_db):
+    from database import set_config
+    from services import accounts
+
+    asyncio.run(set_config("network_proxy", "http://127.0.0.1:17890"))
+    asyncio.run(set_config("feishu_webhook_url", "synthetic-private-notification-target"))
+    original = rows(account_db, "SELECT * FROM app_config ORDER BY key")
+    with pytest.raises(accounts.AccountError, match="无归属|历史"):
+        asyncio.run(accounts.issue_bootstrap_token(now=NOW))
+    assert rows(account_db, "SELECT * FROM app_config ORDER BY key") == original
+    assert not rows(account_db, "SELECT id FROM users")
