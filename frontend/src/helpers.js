@@ -1,3 +1,4 @@
+import { apiFetch } from './hooks/sessionRuntime'
 // 价格小数位按市场最小报价单位: A 股 2 位不变; 港股 10 元以下档位 0.001-0.01 → 3 位;
 // 美股 1 美元以下报价到 0.0001 → 4 位。code 可空(按 A 股处理)。
 export function fmtPrice(v, code) {
@@ -190,7 +191,7 @@ let _brokersCache = null
 export async function loadBrokers() {
   if (_brokersCache) return _brokersCache
   try {
-    const r = await fetch('/api/brokers')
+    const r = await apiFetch('/api/brokers')
     _brokersCache = await r.json()
   } catch { _brokersCache = [] }
   return _brokersCache

@@ -1,3 +1,4 @@
+import AccountGate from './components/AccountGate'
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { useWebSocket } from './hooks/useWebSocket'
 import { api } from './hooks/useApi'
@@ -86,6 +87,10 @@ function CardShell({ title, sub, children }) {
 }
 
 export default function App() {
+  return <div className="h-screen flex flex-col overflow-hidden"><AccountGate><PrivateApp /></AccountGate></div>
+}
+
+function PrivateApp() {
   const [holdings, setHoldings] = useState([])
   const [marketOpen, setMarketOpen] = useState(false)
   const [editTarget, setEditTarget] = useState(null)
@@ -294,7 +299,7 @@ export default function App() {
   }
 
   return (
-    <div className="h-screen flex flex-col overflow-hidden">
+    <div className="h-full flex flex-col overflow-hidden">
       <Header
         marketOpen={marketOpen}
         lastUpdate={lastUpdate}

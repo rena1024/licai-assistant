@@ -1,3 +1,4 @@
+import { apiFetch } from '../hooks/sessionRuntime'
 import { useState } from 'react'
 
 // 每个数据工具一套线性 SVG 图标(描边跟随 currentColor, 贴合暖金深色主题)
@@ -271,7 +272,7 @@ export function SourcesBlock({ sources }) {
 // 关键区别: 停止跟看 ≠ 取消。切页/关抽屉只 abort 下面这根 follow 连接, run 自己跑完并落库,
 // 所以回来能接着看, 没回来也能在历史里翻到。
 export async function startRun(body) {
-  const r = await fetch('/api/ask/runs', {
+  const r = await apiFetch('/api/ask/runs', {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
   })
   if (!r.ok) throw new Error(`${r.status}`)
@@ -281,7 +282,7 @@ export async function startRun(body) {
 // 四层交叉深挖: 起一条后台 run(一轮约 3 分半, 5 次 LLM), 返回同样的 {run_id, session_id}。
 // 走 run 而不是同步请求: 同步的话浏览器/代理会掐断, 而且切页就白跑了。
 export async function startDeepDive(body) {
-  const r = await fetch('/api/ask/deep-dive', {
+  const r = await apiFetch('/api/ask/deep-dive', {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
   })
   if (!r.ok) throw new Error(`${r.status}`)
@@ -292,7 +293,7 @@ export async function startDeepDive(body) {
 // onEnd({finished, gone}) —— finished=这一轮真跑完了; gone=服务端已经不认得这个 run 了
 // (跑完超过保留期被清掉, 或服务重启过), 这时该回 DB 取原文, 别把界面标成出错。
 export function followRun(runId, { cursor = 0, onEvent, onEnd, onError, signal } = {}) {
-  fetch(`/api/ask/runs/${runId}/events?cursor=${cursor}`, { signal }).then(async (resp) => {
+  apiFetch(`/api/ask/runs/${runId}/events?cursor=${cursor}`, { signal }).then(async (resp) => {
     const reader = resp.body.getReader(); const dec = new TextDecoder()
     let buf = ''
     let finished = false
@@ -318,11 +319,11 @@ export function followRun(runId, { cursor = 0, onEvent, onEnd, onError, signal }
 // 服务端内存里还认得的 run(在跑的 + 刚跑完的)。整页刷新后靠它把那一轮捞回来。
 export async function liveRuns(scope) {
   try {
-    const r = await fetch(`/api/ask/runs${scope ? `?scope=${encodeURIComponent(scope)}` : ''}`)
+    const r = await apiFetch(`/api/ask/runs${scope ? `?scope=${encodeURIComponent(scope)}` : ''}`)
     return (await r.json()).runs || []
   } catch { return [] }
 }
 
 export function cancelRun(runId) {
-  return fetch(`/api/ask/runs/${runId}/cancel`, { method: 'POST' }).catch(() => {})
+  return apiFetch(`/api/ask/runs/${runId}/cancel`, { method: 'POST' }).catch(() => {})
 }

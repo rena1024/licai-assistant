@@ -1,3 +1,4 @@
+import { apiFetch } from '../hooks/sessionRuntime'
 import { useState, useEffect } from 'react'
 import { fetchJSON } from '../hooks/useApi'
 import { fmtMoney } from '../helpers'
@@ -9,7 +10,7 @@ export default function RiskBanner({ holdings }) {
   useEffect(() => {
     fetchJSON('/api/settings/feishu').catch(() => {}) // warm up
     // Load risk config
-    fetch('/api/settings/risk').then(r => r.json()).then(d => {
+    apiFetch('/api/settings/risk').then(r => r.json()).then(d => {
       if (d.max_daily_loss) setMaxDailyLoss(parseFloat(d.max_daily_loss))
     }).catch(() => {})
   }, [])

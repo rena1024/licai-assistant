@@ -1,3 +1,4 @@
+import { apiFetch } from '../hooks/sessionRuntime'
 import { useState, useEffect, useCallback, useMemo } from 'react'
 import { fetchJSON } from '../hooks/useApi'
 import Tooltip from './Tooltip'
@@ -60,7 +61,7 @@ export default function SectorOpportunities() {
     const k = `${market}:${r.name}`
     if (whyData[k]) return
     setWhyData(d => ({ ...d, [k]: { loading: true } }))
-    fetch('/api/sector/why', {
+    apiFetch('/api/sector/why', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ market, name: r.name, change_1d: r.change_1d, change_5d: r.change_5d, held: !!r.held, leader: r.leader || null }),
     }).then(res => res.json())

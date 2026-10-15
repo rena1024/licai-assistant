@@ -1,3 +1,4 @@
+import { apiFetch } from '../hooks/sessionRuntime'
 import { useState, useEffect } from 'react'
 import { MiniMarkdown } from './askShared'
 
@@ -18,7 +19,7 @@ export default function NewsDetailModal({ item, onClose }) {
     if (!item) return
     if (_cache.has(cacheKey)) { setInterp(_cache.get(cacheKey)); setLoading(false); return }
     setLoading(true)
-    fetch('/api/news/interpret', {
+    apiFetch('/api/news/interpret', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ title: item.title, content: item.content || '', code: item.code || null, name: item.name || null, source: item.source || null, time: item.time || null, url: item.url || null }),
     }).then(r => r.json()).then(d => { _cache.set(cacheKey, d); setInterp(d) })

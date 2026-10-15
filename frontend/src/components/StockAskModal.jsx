@@ -1,3 +1,4 @@
+import { apiFetch } from '../hooks/sessionRuntime'
 import { useState, useEffect, useRef } from 'react'
 import { createPortal } from 'react-dom'
 import { MiniMarkdown, SourcesBlock, ToolCallStrip, startRun, startDeepDive, followRun, liveRuns, cancelRun } from './askShared'
@@ -111,7 +112,7 @@ export default function StockAskModal({ stock, onClose, initialQuestion = '' }) 
     let last = null
     try {
       if (sessionId.current) {
-        const s = await (await fetch(`/api/ask/sessions/${sessionId.current}`)).json()
+        const s = await (await apiFetch(`/api/ask/sessions/${sessionId.current}`)).json()
         const msgs = s.messages || []
         if (msgs[msgs.length - 1]?.role === 'assistant') last = msgs[msgs.length - 1]
       }

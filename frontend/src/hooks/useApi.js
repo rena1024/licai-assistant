@@ -1,3 +1,5 @@
+import { apiFetch, onSessionReset } from './sessionRuntime'
+
 const BASE = ''
 
 // 数据变更广播: 持仓/资产的写操作成功后通知所有关心的组件(顶部 Dashboard 等)
@@ -7,22 +9,23 @@ export const MUTATED_EVENT = 'licai:data-mutated'
 // GET 预取缓存: 同 URL 短 TTL 内复用同一个 promise——榜单预取光标附近个股的K线,
 // 方向键翻股时 ProKline 直接命中, 不再等网络。失败的请求立即出缓存, 下次可重试。
 const _prefetched = new Map()
+onSessionReset(() => _prefetched.clear())
 const PREFETCH_TTL = 60_000
 export function prefetchJSON(path) {
   const hit = _prefetched.get(path)
   if (hit && Date.now() - hit.t < PREFETCH_TTL) return hit.p
   const p = fetchJSON(path)
-  p.catch(() => { _prefetched.delete(path) })
+  p.catch(() => { if (_prefetched.get(path)?.p === p) _prefetched.delete(path) })
   _prefetched.set(path, { t: Date.now(), p })
   return p
 }
 
 export async function fetchJSON(path, options) {
-  const res = await fetch(`${BASE}${path}`, {
+  const res = await apiFetch(`${BASE}${path}`, {
     headers: { 'Content-Type': 'application/json' },
     ...options,
   })
-  const data = await res.json().catch(() => ({}))
+  const data = res.status === 204 ? {} : await res.json()
   if (res.ok) {
     const method = (options?.method || 'GET').toUpperCase()
     if (method !== 'GET' && /^\/api\/(assets|portfolio)/.test(path)) {
@@ -37,7 +40,7 @@ export async function fetchJSON(path, options) {
       if (typeof data.detail === 'string') msg = data.detail
       else if (Array.isArray(data.detail)) {
         msg = data.detail.map(d => `${(d.loc || []).slice(-1)[0] || ''}: ${d.msg}`).join('; ')
-      } else msg = JSON.stringify(data.detail)
+      } else msg = data.detail.message || `HTTP ${res.status}`
     }
     throw new Error(msg)
   }

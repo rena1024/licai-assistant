@@ -1,3 +1,4 @@
+import { apiFetch } from '../hooks/sessionRuntime'
 import { useState, useEffect, useRef } from 'react'
 import { fetchJSON } from '../hooks/useApi'
 import { MiniMarkdown, SourcesBlock, ToolCallStrip, startRun, followRun, liveRuns, cancelRun } from './askShared'
@@ -158,7 +159,7 @@ export default function StockAsk({ page = false }) {
 
   const deleteSession = async (id, e) => {
     e?.stopPropagation()
-    try { await fetch(`/api/ask/sessions/${id}`, { method: 'DELETE' }) } catch { /* ignore */ }
+    try { await apiFetch(`/api/ask/sessions/${id}`, { method: 'DELETE' }) } catch { /* ignore */ }
     if (sessionId.current === id) newChat()
     loadSessions()
   }
