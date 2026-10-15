@@ -27,6 +27,7 @@ from fastapi.responses import FileResponse
 from config import config
 from database import init_db, get_config, set_config
 from services import llm_client
+from api.auth_routes import router as auth_router
 from api.portfolio_routes import router as portfolio_router
 from api.market_routes import router as market_router
 from api.settings_routes import router as settings_router
@@ -73,6 +74,21 @@ async def lifespan(app: FastAPI):
     await init_db()
     if paths.profile == "test":
         # 不探测代理、不恢复真实凭证、不预热数据、不创建生产后台任务。
+        yield
+        return
+    from services import accounts
+    try:
+        bootstrap_file = await accounts.issue_bootstrap_token()
+    except accounts.AccountError as exc:
+        if exc.code not in {"expired_bootstrap", "bootstrap_file"}:
+            raise
+        # 过期或丢失凭据只能由本机命令轮换，网页不能自行重新生成。
+        print(f"[startup] {exc}；运行 python scripts/admin_recovery.py bootstrap-token --renew")
+        yield
+        return
+    if bootstrap_file is not None:
+        print(f"[startup] 首次初始化凭据保存在本机文件：{bootstrap_file}")
+        # 初始化前不启动旧版个人任务，也不恢复数据库中的外部配置。
         yield
         return
     # 上一个进程留下的"在跑"的 agent 轮次: 进程一没那些 task 就不存在了, 留着 running
@@ -196,6 +212,7 @@ app = FastAPI(title="理财助手", lifespan=lifespan)
 app.mount("/assets", StaticFiles(directory="static/assets"), name="assets")
 
 # Include routers
+app.include_router(auth_router)
 app.include_router(portfolio_router)
 app.include_router(market_router)
 app.include_router(settings_router)

@@ -2,12 +2,19 @@
 from __future__ import annotations
 import aiosqlite
 from config import config
-from services.runtime_paths import database_path, get_runtime_paths, LAYOUT_VERSION
+from services.runtime_paths import database_path, get_runtime_paths, LAYOUT_VERSION, RuntimePathError
 
 # 观察池的默认分组。它是一个真实分组(watchlist_group 里有行), 不是"没有分组" ——
 # 一只票可以同时在「自选」和「金矿」里。加进观察池时自动落这个组; 取消到一个组都不剩时
 # 也退回它, 保证任何一只票至少能在某个分组视图里被看见。
 DEFAULT_WATCH_GROUP = "自选"
+ACCOUNT_SCHEMA_VERSION = "1"
+# 首次启动自动插入的模板不是用户配置；初始化保护据此识别被修改的无归属费率。
+DEFAULT_BROKERS = (
+    ("招商证券", 0.0001854, 5.0, 0.0001854, 5.0, 1),
+    ("银河证券", 0.000086, 5.0, 0.00005, 0.1, 0),
+    ("盈立证券", 0.0008, 0.0, 0.0008, 0.0, 0),
+)
 
 
 def resolve_action_time(action: dict) -> str:
@@ -413,6 +420,54 @@ CREATE INDEX IF NOT EXISTS idx_prompt_rule_status ON prompt_rule(status, id);
 """
 
 
+ACCOUNT_SCHEMA = """
+CREATE TABLE IF NOT EXISTS users (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    uuid TEXT UNIQUE NOT NULL,
+    username TEXT UNIQUE NOT NULL,
+    password_hash TEXT NOT NULL,
+    role TEXT NOT NULL CHECK (role IN ('admin', 'user')),
+    active INTEGER NOT NULL DEFAULT 1 CHECK (active IN (0, 1)),
+    must_change_password INTEGER NOT NULL DEFAULT 0 CHECK (must_change_password IN (0, 1)),
+    auth_version INTEGER NOT NULL DEFAULT 1 CHECK (auth_version > 0),
+    password_reset_at INTEGER,
+    created_at INTEGER NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS users_single_admin ON users(role) WHERE role = 'admin';
+
+CREATE TABLE IF NOT EXISTS sessions (
+    session_id TEXT PRIMARY KEY,
+    token_hash TEXT UNIQUE NOT NULL,
+    user_id INTEGER NOT NULL REFERENCES users(id),
+    auth_version INTEGER NOT NULL,
+    created_at INTEGER NOT NULL,
+    expires_at INTEGER NOT NULL CHECK (expires_at > created_at),
+    revoked_at INTEGER
+);
+CREATE INDEX IF NOT EXISTS sessions_user ON sessions(user_id);
+
+CREATE TABLE IF NOT EXISTS bootstrap_state (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    token_hash TEXT NOT NULL,
+    token_file TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    expires_at INTEGER NOT NULL CHECK (expires_at > created_at),
+    consumed_at INTEGER
+);
+
+CREATE TABLE IF NOT EXISTS audit_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    action TEXT NOT NULL,
+    outcome TEXT NOT NULL,
+    actor_id INTEGER,
+    target_id INTEGER,
+    reason TEXT NOT NULL DEFAULT '',
+    created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS audit_events_created ON audit_events(created_at);
+"""
+
+
 async def get_db() -> aiosqlite.Connection:
     path = database_path(config.db_path)
     path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
@@ -420,6 +475,7 @@ async def get_db() -> aiosqlite.Connection:
         path.touch(mode=0o600, exist_ok=True)
     db = await aiosqlite.connect(path)
     db.row_factory = aiosqlite.Row
+    await db.execute("PRAGMA foreign_keys = ON")
     return db
 
 
@@ -430,9 +486,16 @@ async def init_db():
         paths.check_database(database_path(config.db_path))
     db = await get_db()
     try:
+        metadata = await (await db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='runtime_metadata'")).fetchone()
+        if metadata:
+            version = await (await db.execute("SELECT value FROM runtime_metadata WHERE key='account_schema_version'")).fetchone()
+            if version and version[0] != ACCOUNT_SCHEMA_VERSION:
+                raise RuntimePathError("账号数据库版本不兼容，停止初始化")
         await db.executescript(SCHEMA)
+        await db.executescript(ACCOUNT_SCHEMA)
         await db.execute("CREATE TABLE IF NOT EXISTS runtime_metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
         await db.execute("INSERT OR IGNORE INTO runtime_metadata VALUES ('layout_version', ?)", (LAYOUT_VERSION,))
+        await db.execute("INSERT OR IGNORE INTO runtime_metadata VALUES ('account_schema_version', ?)", (ACCOUNT_SCHEMA_VERSION,))
         # Migration: add trade_date to position_actions if missing
         cursor = await db.execute("PRAGMA table_info(position_actions)")
         cols = {row[1] for row in await cursor.fetchall()}
@@ -554,16 +617,13 @@ async def init_db():
         """)
         cur = await db.execute("SELECT COUNT(*) FROM brokers")
         if (await cur.fetchone())[0] == 0:
-            await db.execute(
+            await db.executemany(
                 "INSERT INTO brokers (name, stock_rate, stock_min, etf_rate, etf_min, is_default) VALUES (?,?,?,?,?,?)",
-                ("招商证券", 0.0001854, 5.0, 0.0001854, 5.0, 1))
-            await db.execute(
-                "INSERT INTO brokers (name, stock_rate, stock_min, etf_rate, etf_min, is_default) VALUES (?,?,?,?,?,?)",
-                ("银河证券", 0.000086, 5.0, 0.00005, 0.1, 0))
+                DEFAULT_BROKERS[:2])
         # 港美股券商(港美股费用走 services/market_fees.py 的收费方案, 这里的 A 股费率只在它代买 A 股时用)
         await db.execute(
             "INSERT OR IGNORE INTO brokers (name, stock_rate, stock_min, etf_rate, etf_min, is_default) VALUES (?,?,?,?,?,?)",
-            ("盈立证券", 0.0008, 0.0, 0.0008, 0.0, 0))
+            DEFAULT_BROKERS[2])
         cur = await db.execute("PRAGMA table_info(holdings)")
         hcols = {r[1] for r in await cur.fetchall()}
         if "broker" not in hcols:
