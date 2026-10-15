@@ -1,6 +1,8 @@
 fastapi>=0.100.0
 uvicorn[standard]>=0.23.0
 akshare>=1.12.0
+# AKShare 已使用的 JS 引擎；锁定本轮验证的上下文预热接口版本。
+mini-racer==0.14.1
 aiosqlite>=0.19.0
 # 账号密码使用 Argon2id；不自行实现密码哈希。
 pwdlib[argon2]==0.3.1

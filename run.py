@@ -27,6 +27,7 @@ from fastapi.responses import FileResponse
 from config import config
 from database import init_db, get_config, set_config
 from services import llm_client
+from services.js_runtime import initialize_js_runtime
 from api.auth_routes import router as auth_router
 from api.portfolio_routes import router as portfolio_router
 from api.market_routes import router as market_router
@@ -76,6 +77,8 @@ async def lifespan(app: FastAPI):
         # 不探测代理、不恢复真实凭证、不预热数据、不创建生产后台任务。
         yield
         return
+    # 在任何请求或后台行情线程运行前串行准备 V8 的首个上下文。
+    initialize_js_runtime()
     from services import accounts
     try:
         bootstrap_file = await accounts.issue_bootstrap_token()
