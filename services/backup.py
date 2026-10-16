@@ -7,6 +7,7 @@ from pathlib import Path
 import re
 import shutil
 import sqlite3
+from contextlib import closing
 import tempfile
 import time
 import uuid
@@ -75,10 +76,10 @@ def create_backup(*,kind='manual',now=None,maintenance=False):
             if not maintenance:check_generation()
             target=temporary/'database.sqlite3'
             source=database_path(config.db_path)
-            with sqlite3.connect(source.as_uri()+'?mode=ro',uri=True) as reader,sqlite3.connect(target) as writer:
+            with closing(sqlite3.connect(source.as_uri()+'?mode=ro',uri=True)) as reader,closing(sqlite3.connect(target)) as writer:
                 reader.backup(writer)
             target.chmod(0o600)
-            with sqlite3.connect(target) as snapshot:
+            with closing(sqlite3.connect(target)) as snapshot:
                 versions=_schema(snapshot)
                 references=set()
                 for table,column in (('ask_message','meta'),('ask_run','events'),('morning_briefings','payload_json')):
@@ -130,7 +131,7 @@ def validate_backup(identifier):
             if _digest(file)!=digest:raise ValueError()
         actual={file.relative_to(point).as_posix() for file in point.rglob('*') if file.is_file() and file.name!='manifest.json'}
         if actual!=set(files):raise ValueError()
-        with sqlite3.connect((point/'database.sqlite3').as_uri()+'?mode=ro',uri=True) as db:
+        with closing(sqlite3.connect((point/'database.sqlite3').as_uri()+'?mode=ro',uri=True)) as db:
             if _schema(db)!=manifest['schema']:raise ValueError()
         return point
     except (OSError,ValueError,KeyError,TypeError,sqlite3.DatabaseError):

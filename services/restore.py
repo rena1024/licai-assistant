@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import shutil
 import sqlite3
+from contextlib import closing
 import tempfile
 import threading
 import time
@@ -60,9 +61,9 @@ def _replace_current(point,actor_id):
             manifest=json.loads((point/'manifest.json').read_text())
             for name in manifest['files']:backup._copy_file(point/name,stage/name)
             source=database_path(config.db_path)
-            with sqlite3.connect(source) as current:
+            with closing(sqlite3.connect(source)) as current:
                 local={row[0] for row in current.execute("SELECT u.uuid FROM users u JOIN user_settings s ON s.user_id=u.id WHERE s.key='ai_mode' AND s.value='local_only'")}
-            with sqlite3.connect(stage/'database.sqlite3') as restored:
+            with closing(sqlite3.connect(stage/'database.sqlite3')) as restored:
                 restored.execute('UPDATE sessions SET revoked_at=? WHERE revoked_at IS NULL',(int(time.time()),))
                 restored.execute('UPDATE users SET auth_version=auth_version+1')
                 restored.execute("UPDATE ask_run SET status='interrupted' WHERE status='running'")
@@ -130,7 +131,7 @@ def recover_interrupted_restore():
 def _reload_configuration():
     """恢复已加载的运行配置，不探测网络或调用模型。环境变量仍由下次进程启动加载。"""
     from services import proxy_config,tdx_client
-    with sqlite3.connect(database_path(config.db_path)) as connection:
+    with closing(sqlite3.connect(database_path(config.db_path))) as connection:
         values=dict(connection.execute('SELECT key,value FROM app_config'))
     proxy_config.configure(os.environ.get('CRYPTO_PROXY') or values.get('network_proxy',''))
     tdx_client.configure(os.environ.get('TDX_BASE_URL') or values.get('tdx_base_url') or getattr(config,'tdx_base_url',''))
