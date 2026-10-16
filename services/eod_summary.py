@@ -4,6 +4,7 @@
 + 大盘一行(指数/涨跌家数/涨停跌停)。纯客观数据, 不构成任何买卖建议。
 """
 from __future__ import annotations
+from services.user_context import require_user_id
 
 import asyncio
 import datetime
@@ -122,7 +123,7 @@ async def build_eod_summary() -> dict:
     except Exception:
         pass
 
-    watch_codes = [w["code"] for w in await list_watchlist() if w["code"] not in pos]
+    watch_codes = [w["code"] for w in await list_watchlist(user_id=require_user_id()) if w["code"] not in pos]
     quotes = await get_realtime_quotes(watch_codes) if watch_codes else {}
     rows.sort(key=lambda r: abs(r["今日浮动"] or 0), reverse=True)
     total_chg = round(sum(r["今日浮动"] or 0 for r in rows))

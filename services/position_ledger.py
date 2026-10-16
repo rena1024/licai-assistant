@@ -476,7 +476,7 @@ def compute_position_state(
 async def broker_fee_resolver():
     """一次性读券商表, 返回 (name)->(rate,min) 解析器(找不到→默认券商), 避免每笔查库。"""
     from database import list_brokers
-    brokers = await list_brokers()
+    brokers = await list_brokers(user_id=require_user_id())
     default = next((x for x in brokers if x.get("is_default")), None) or (brokers[0] if brokers else None)
     bymap = {x["name"]: (x["stock_rate"], x["stock_min"]) for x in brokers}
 

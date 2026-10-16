@@ -420,7 +420,7 @@ async def list_assets():
 
     # 场内 ETF 未设券商时, 显示回退到配置默认券商(与 A股 一致, 让默认也有 tag)
     from database import list_brokers
-    _brokers = await list_brokers()
+    _brokers = await list_brokers(user_id=require_user_id())
     _default_broker = next((b["name"] for b in _brokers if b.get("is_default")),
                            (_brokers[0]["name"] if _brokers else None))
     for a in enriched:

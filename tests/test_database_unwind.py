@@ -24,8 +24,8 @@ def temp_db(monkeypatch):
 def test_create_and_get_unwind_plan(temp_db):
     from database import save_unwind_plan, get_unwind_plan
 
-    asyncio.run(save_unwind_plan("601212", total_budget=10000.0))
-    plan = asyncio.run(get_unwind_plan("601212"))
+    asyncio.run(save_unwind_plan("601212", total_budget=10000.0, user_id=require_user_id()))
+    plan = asyncio.run(get_unwind_plan("601212", user_id=require_user_id()))
     assert plan is not None
     assert plan["stock_code"] == "601212"
     assert plan["total_budget"] == 10000.0
@@ -36,11 +36,11 @@ def test_create_and_get_unwind_plan(temp_db):
 def test_add_tranches(temp_db):
     from database import save_unwind_plan, add_tranche, get_tranches
 
-    asyncio.run(save_unwind_plan("601212", total_budget=10000.0))
-    asyncio.run(add_tranche("601212", idx=1, trigger_price=7.80, shares=200, requires_health="any"))
-    asyncio.run(add_tranche("601212", idx=2, trigger_price=7.20, shares=300, requires_health="yellow"))
+    asyncio.run(save_unwind_plan("601212", total_budget=10000.0, user_id=require_user_id()))
+    asyncio.run(add_tranche("601212", idx=1, trigger_price=7.80, shares=200, requires_health="any", user_id=require_user_id()))
+    asyncio.run(add_tranche("601212", idx=2, trigger_price=7.20, shares=300, requires_health="yellow", user_id=require_user_id()))
 
-    rows = asyncio.run(get_tranches("601212"))
+    rows = asyncio.run(get_tranches("601212", user_id=require_user_id()))
     assert len(rows) == 2
     assert rows[0]["idx"] == 1
     assert rows[0]["trigger_price"] == 7.80
@@ -50,15 +50,15 @@ def test_add_tranches(temp_db):
 def test_mark_tranche_executed(temp_db):
     from database import save_unwind_plan, add_tranche, mark_tranche_executed, get_tranches
 
-    asyncio.run(save_unwind_plan("601212", total_budget=10000.0))
-    asyncio.run(add_tranche("601212", idx=1, trigger_price=7.80, shares=200))
+    asyncio.run(save_unwind_plan("601212", total_budget=10000.0, user_id=require_user_id()))
+    asyncio.run(add_tranche("601212", idx=1, trigger_price=7.80, shares=200, user_id=require_user_id()))
 
-    tranches = asyncio.run(get_tranches("601212"))
+    tranches = asyncio.run(get_tranches("601212", user_id=require_user_id()))
     tranche_id = tranches[0]["id"]
 
-    asyncio.run(mark_tranche_executed(tranche_id, executed_price=7.82))
+    asyncio.run(mark_tranche_executed(tranche_id, executed_price=7.82, user_id=require_user_id()))
 
-    tranches = asyncio.run(get_tranches("601212"))
+    tranches = asyncio.run(get_tranches("601212", user_id=require_user_id()))
     assert tranches[0]["status"] == "executed"
     assert tranches[0]["executed_price"] == 7.82
 

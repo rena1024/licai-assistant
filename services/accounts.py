@@ -133,7 +133,7 @@ async def _assert_fresh_business(db) -> None:
     if config_row:
         raise AccountError("legacy_data")
     brokers = await (await db.execute("SELECT name, stock_rate, stock_min, etf_rate, etf_min, is_default FROM brokers")).fetchall()
-    if {tuple(row) for row in brokers} != set(DEFAULT_BROKERS):
+    if brokers:
         raise AccountError("legacy_data")
 
 
@@ -237,6 +237,10 @@ async def _insert_user(db, *, username: str, password: str, role: str, timestamp
     except sqlite3.IntegrityError:
         raise AccountError("username_taken") from None
     row = await (await db.execute("SELECT * FROM users WHERE id=?", (cursor.lastrowid,))).fetchone()
+    await db.executemany(
+        'INSERT INTO brokers(user_id,name,stock_rate,stock_min,etf_rate,etf_min,is_default) VALUES (?,?,?,?,?,?,?)',
+        [(row['id'], *values) for values in DEFAULT_BROKERS],
+    )
     return _account(row)
 
 

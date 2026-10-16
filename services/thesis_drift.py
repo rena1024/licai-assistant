@@ -240,10 +240,10 @@ async def drift(code: str) -> dict:
     bare = (code or "").split(".")[-1]
     # 先按完整代码查, 再退回裸码(保存端历史上按裸码存)
     key = full
-    revs = await get_thesis_revisions(full)
+    revs = await get_thesis_revisions(full, user_id=require_user_id())
     if not revs and bare != full:
-        key, revs = bare, await get_thesis_revisions(bare)
-    t = await get_thesis(key)
+        key, revs = bare, await get_thesis_revisions(bare, user_id=require_user_id())
+    t = await get_thesis(key, user_id=require_user_id())
     if not revs:
         return {"code": full, "有记录": False,
                 "note": "没记过买入逻辑, 也就无从谈漂移。"}

@@ -1,3 +1,4 @@
+from services.user_context import require_user_id
 import asyncio
 import os
 import tempfile
@@ -13,12 +14,14 @@ def fresh_db(monkeypatch):
     # database.get_db() reads config.config.db_path (the singleton instance)
     monkeypatch.setattr("config.config.db_path", path)
     asyncio.run(db.init_db())
+    from tests.account_helpers import seed_owner
+    asyncio.run(seed_owner())
     yield path
     os.remove(path)
 
 
 def test_seed_creates_zhaoshang_yinhe(fresh_db):
-    rows = asyncio.run(db.list_brokers())
+    rows = asyncio.run(db.list_brokers(user_id=require_user_id()))
     names = {r["name"] for r in rows}
     assert "招商证券" in names and "银河证券" in names
     zs = next(r for r in rows if r["name"] == "招商证券")
@@ -166,9 +169,9 @@ def test_compute_state_default_is_zhaoshang():
 
 
 def test_set_default_is_exclusive(fresh_db):
-    rows = asyncio.run(db.list_brokers())
+    rows = asyncio.run(db.list_brokers(user_id=require_user_id()))
     yh = next(r for r in rows if r["name"] == "银河证券")
-    asyncio.run(db.update_broker(yh["id"], is_default=1))
-    rows2 = asyncio.run(db.list_brokers())
+    asyncio.run(db.update_broker(yh["id"], is_default=1, user_id=require_user_id()))
+    rows2 = asyncio.run(db.list_brokers(user_id=require_user_id()))
     defaults = [r for r in rows2 if r["is_default"]]
     assert len(defaults) == 1 and defaults[0]["name"] == "银河证券"

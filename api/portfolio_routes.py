@@ -25,7 +25,7 @@ router = APIRouter(prefix="/api/portfolio", tags=["portfolio"])
 
 async def _broker_stock_fee(broker_name):
     """按券商 name 返回 (股票佣金费率, 最低). 找不到→默认券商. 都没有→(None,None) 用模块默认。"""
-    brokers = await list_brokers()
+    brokers = await list_brokers(user_id=require_user_id())
     b = next((x for x in brokers if x["name"] == broker_name), None) if broker_name else None
     if b is None:
         b = next((x for x in brokers if x["is_default"]), None) or (brokers[0] if brokers else None)
@@ -61,7 +61,7 @@ class ActionUpdate(BaseModel):
 
 async def _default_broker_name():
     """配置里的默认券商名(is_default), 没有则第一个。用于显示回退(选"默认券商"时也能打 tag)。"""
-    brokers = await list_brokers()
+    brokers = await list_brokers(user_id=require_user_id())
     d = next((x for x in brokers if x.get("is_default")), None) or (brokers[0] if brokers else None)
     return d["name"] if d else None
 
@@ -1856,13 +1856,13 @@ async def eod_summary(push: bool = False):
 @router.get("/thesis")
 async def list_all_theses():
     """所有持仓逻辑记录(code→thesis), 前端一次拉全用于标记哪些已写。"""
-    return await list_theses()
+    return await list_theses(user_id=require_user_id())
 
 
 @router.get("/thesis/{code}")
 async def read_thesis(code: str):
     bare = code.split(".")[-1]
-    t = await get_thesis(bare)
+    t = await get_thesis(bare, user_id=require_user_id())
     return t or {"code": bare, "thesis": "", "name": ""}
 
 
@@ -1877,17 +1877,17 @@ async def write_thesis(code: str, data: ThesisIn):
     bare = code.split(".")[-1]
     text = (data.thesis or "").strip()
     if not text:
-        await delete_thesis(bare)
+        await delete_thesis(bare, user_id=require_user_id())
         return {"message": "已清空"}
     facts = ""
-    cur = await get_thesis(bare)
+    cur = await get_thesis(bare, user_id=require_user_id())
     if not cur or (cur.get("thesis") or "").strip() != text:
         from services.thesis_drift import snapshot
         try:
             facts = json.dumps(await snapshot(bare), ensure_ascii=False)
         except Exception as e:
             print(f"[thesis] 事实快照取数失败 {bare}: {e}")
-    r = await set_thesis(bare, text, data.name or "", facts)
+    r = await set_thesis(bare, text, data.name or "", facts, user_id=require_user_id())
     return {"message": "已保存", **r}
 
 

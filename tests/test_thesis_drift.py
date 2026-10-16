@@ -5,6 +5,7 @@
 说法"在两档划分里会被归进"事实变化"(价格的确变了) —— 于是最该被指出来的那种改写反而看
 起来完全正当。所以这里三档, 且判定顺序(基本面优先)也要钉住。
 """
+from services.user_context import require_user_id
 import asyncio
 import json
 
@@ -208,11 +209,13 @@ def test_saving_the_same_text_twice_appends_only_one_revision(tmp_db):
     async def body():
         d = tmp_db
         await d.init_db()
-        r1 = await d.set_thesis("600176", "龙头地位稳", "中国巨石", snap())
-        r2 = await d.set_thesis("600176", "龙头地位稳", "中国巨石", snap(价格=6.0))
-        r3 = await d.set_thesis("600176", "龙头地位稳, 估值不高", "中国巨石", snap(价格=6.0))
+        from tests.account_helpers import seed_owner
+        await seed_owner()
+        r1 = await d.set_thesis("600176", "龙头地位稳", "中国巨石", snap(), user_id=require_user_id())
+        r2 = await d.set_thesis("600176", "龙头地位稳", "中国巨石", snap(价格=6.0), user_id=require_user_id())
+        r3 = await d.set_thesis("600176", "龙头地位稳, 估值不高", "中国巨石", snap(价格=6.0), user_id=require_user_id())
         assert (r1["appended"], r2["appended"], r3["appended"]) == (True, False, True)
-        revs = await d.get_thesis_revisions("600176")
+        revs = await d.get_thesis_revisions("600176", user_id=require_user_id())
         assert [r["rev"] for r in revs] == [1, 2]
         assert revs[1]["thesis"].endswith("估值不高")
     asyncio.run(body())
@@ -223,9 +226,11 @@ def test_revisions_keep_their_own_snapshot(tmp_db):
     async def body():
         d = tmp_db
         await d.init_db()
-        await d.set_thesis("600176", "一句话", "", snap(价格=10.0))
-        await d.set_thesis("600176", "另一句话", "", snap(价格=6.0))
-        revs = await d.get_thesis_revisions("600176")
+        from tests.account_helpers import seed_owner
+        await seed_owner()
+        await d.set_thesis("600176", "一句话", "", snap(价格=10.0), user_id=require_user_id())
+        await d.set_thesis("600176", "另一句话", "", snap(价格=6.0), user_id=require_user_id())
+        revs = await d.get_thesis_revisions("600176", user_id=require_user_id())
         assert json.loads(revs[0]["facts"])["价格"] == 10.0
         assert json.loads(revs[1]["facts"])["价格"] == 6.0
     asyncio.run(body())
@@ -236,11 +241,13 @@ def test_clearing_the_thesis_drops_its_revisions(tmp_db):
     async def body():
         d = tmp_db
         await d.init_db()
-        await d.set_thesis("600176", "一句话", "", snap())
-        await d.set_thesis("600176", "另一句话", "", snap())
-        await d.delete_thesis("600176")
-        assert await d.get_thesis_revisions("600176") == []
-        r = await d.set_thesis("600176", "重新写的逻辑", "", snap())
+        from tests.account_helpers import seed_owner
+        await seed_owner()
+        await d.set_thesis("600176", "一句话", "", snap(), user_id=require_user_id())
+        await d.set_thesis("600176", "另一句话", "", snap(), user_id=require_user_id())
+        await d.delete_thesis("600176", user_id=require_user_id())
+        assert await d.get_thesis_revisions("600176", user_id=require_user_id()) == []
+        r = await d.set_thesis("600176", "重新写的逻辑", "", snap(), user_id=require_user_id())
         assert r["rev"] == 1
     asyncio.run(body())
 
@@ -254,19 +261,25 @@ def test_migration_seeds_rev1_without_faking_a_snapshot(tmp_db):
     async def body():
         d = tmp_db
         await d.init_db()
+        from tests.account_helpers import seed_owner
+        await seed_owner()
         db = await d.get_db()
         try:                                # 绕过 set_thesis, 模拟加这张表之前写下的老数据
             await db.execute(
-                "INSERT INTO position_thesis (code, name, thesis) VALUES ('000333','美的','老逻辑')")
+                "INSERT INTO position_thesis (user_id, code, name, thesis) VALUES (1,'000333','美的','老逻辑')")
             await db.commit()
         finally:
             await db.close()
-        await d.init_db()                   # 重启一次 → 迁移补种
-        revs = await d.get_thesis_revisions("000333")
+        await d.init_db()
+        from tests.account_helpers import seed_owner
+        await seed_owner()                   # 重启一次 → 迁移补种
+        revs = await d.get_thesis_revisions("000333", user_id=require_user_id())
         assert [r["rev"] for r in revs] == [1]
         assert revs[0]["thesis"] == "老逻辑" and revs[0]["facts"] == ""
-        await d.init_db()                   # 再启一次不能重复补种
-        assert len(await d.get_thesis_revisions("000333")) == 1
+        await d.init_db()
+        from tests.account_helpers import seed_owner
+        await seed_owner()                   # 再启一次不能重复补种
+        assert len(await d.get_thesis_revisions("000333", user_id=require_user_id())) == 1
     asyncio.run(body())
 
 
@@ -284,13 +297,15 @@ def test_drift_walks_every_adjacent_pair(tmp_db, monkeypatch):
     async def body():
         d = tmp_db
         await d.init_db()
+        from tests.account_helpers import seed_owner
+        await seed_owner()
         await d.set_thesis("600176", "看好存储涨价兑现到业绩", "巨石",
-                           snap(价格=10.0, **{"浮动盈亏%": -2.0}))
+                           snap(价格=10.0, **{"浮动盈亏%": -2.0}), user_id=require_user_id())
         await d.set_thesis("600176", "看好存储涨价兑现到业绩, 行业格局好", "巨石",
-                           snap(价格=6.5, PE_TTM=13.0, PB=1.3, **{"浮动盈亏%": -18.0}))
+                           snap(价格=6.5, PE_TTM=13.0, PB=1.3, **{"浮动盈亏%": -18.0}), user_id=require_user_id())
         await d.set_thesis("600176", "行业格局长期向好, 龙头集中度提升", "巨石",
                            snap(价格=6.4, PE_TTM=13.0, PB=1.3, 报告期="20250930",
-                                **{"浮动盈亏%": -19.0}))
+                                **{"浮动盈亏%": -19.0}), user_id=require_user_id())
         import services.thesis_drift as td
 
         async def _snap(_c):
@@ -310,7 +325,9 @@ def test_drift_reports_facts_moving_after_the_last_revision(tmp_db, monkeypatch)
     async def body():
         d = tmp_db
         await d.init_db()
-        await d.set_thesis("600176", "看好存储涨价", "巨石", snap(价格=10.0))
+        from tests.account_helpers import seed_owner
+        await seed_owner()
+        await d.set_thesis("600176", "看好存储涨价", "巨石", snap(价格=10.0), user_id=require_user_id())
         import services.thesis_drift as td
 
         async def _snap(_c):
@@ -381,10 +398,12 @@ def test_agent_tool_returns_the_drift_block_and_explains_the_three_tiers(tmp_db,
     async def body():
         d = tmp_db
         await d.init_db()
+        from tests.account_helpers import seed_owner
+        await seed_owner()
         await d.set_thesis("600176", "看好存储涨价兑现", "巨石",
-                           snap(价格=10.0, **{"浮动盈亏%": -2.0}))
+                           snap(价格=10.0, **{"浮动盈亏%": -2.0}), user_id=require_user_id())
         await d.set_thesis("600176", "行业格局长期向好", "巨石",
-                           snap(价格=6.5, PE_TTM=13.0, PB=1.3, **{"浮动盈亏%": -20.0}))
+                           snap(价格=6.5, PE_TTM=13.0, PB=1.3, **{"浮动盈亏%": -20.0}), user_id=require_user_id())
         import services.thesis_drift as td
 
         async def _snap(_c):

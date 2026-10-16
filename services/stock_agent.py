@@ -2519,12 +2519,12 @@ async def _tool_get_thesis(code: str) -> dict:
     from database import get_thesis, list_theses
     from services.market_data import normalize_stock_code
     if not code:
-        ts = await list_theses()
+        ts = await list_theses(user_id=require_user_id())
         return {"theses": ts, "note": "用户记录的各持仓买入逻辑; 复盘时对照现状看逻辑是否还成立。"}
     raw = normalize_stock_code(_norm_code(code))
     bare = raw.split(".")[-1] if "." in raw else raw
     # 先按完整代码(HK.00700)查, 再退回裸码(保存端历史上按裸码存)
-    t = (await get_thesis(raw) if raw != bare else None) or await get_thesis(bare)
+    t = (await get_thesis(raw, user_id=require_user_id()) if raw != bare else None) or await get_thesis(bare, user_id=require_user_id())
     if not t:
         return {"code": bare, "thesis": None, "note": "用户没记这只的买入逻辑。可提示他在持仓里补一句, 以后好复盘。"}
     # 算"记于多久之前", 让复盘能锚定时间(几个月前的逻辑 vs 昨天刚记的, 复盘意义不同)

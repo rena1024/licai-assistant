@@ -4,6 +4,7 @@
 + 业绩预告凭据。纯客观结构描述, 不构成任何买卖建议。
 """
 from __future__ import annotations
+from services.user_context import require_user_id
 
 import asyncio
 import time
@@ -42,7 +43,7 @@ async def _structure_tags(code: str) -> str:
 async def watchlist_view() -> dict:
     from database import list_watchlist
     from services.market_data import code_currency, get_realtime_quotes, is_a_share, split_stock_code
-    wl = await list_watchlist()
+    wl = await list_watchlist(user_id=require_user_id())
 
     # 持仓自动并入(置顶「持」组): 渲染时现取, 不写自选表——清仓自动消失, 不污染自选口径。
     # 并个股: A 股 6 位代码 + 港股/美股(HK./US. 带前缀); 场外基金/ETF 有各自看板, 不塞这里。

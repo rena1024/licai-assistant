@@ -170,6 +170,8 @@ def test_existing_unowned_business_data_blocks_bootstrap(account_db):
     from services import accounts
 
     with sqlite3.connect(account_db) as db:
+        db.execute("DROP TABLE cashflow_monthly")
+        db.execute("CREATE TABLE cashflow_monthly(month TEXT, income REAL, fixed_cost REAL)")
         db.execute("INSERT INTO cashflow_monthly (month, income, fixed_cost) VALUES ('2026-01', 20, 5)")
     before = rows(account_db, "SELECT * FROM cashflow_monthly")
     with pytest.raises(accounts.AccountError, match="无归属|历史"):
@@ -309,7 +311,9 @@ def test_modified_broker_templates_are_not_adopted_by_first_admin(account_db):
     from services import accounts
 
     with sqlite3.connect(account_db) as db:
-        db.execute("UPDATE brokers SET stock_rate=0.123 WHERE name='招商证券'")
+        db.execute("DROP TABLE brokers")
+        db.execute("CREATE TABLE brokers(name TEXT, stock_rate REAL, stock_min REAL, etf_rate REAL, etf_min REAL, is_default INTEGER)")
+        db.execute("INSERT INTO brokers VALUES ('招商证券',0.123,5,0.001,5,1)")
     with pytest.raises(accounts.AccountError, match="无归属|历史"):
         asyncio.run(accounts.issue_bootstrap_token(now=NOW))
     assert not rows(account_db, "SELECT id FROM users")

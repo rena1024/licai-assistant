@@ -1,5 +1,6 @@
 # api/broker_routes.py
 from __future__ import annotations
+from services.user_context import require_user_id
 from typing import Optional
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
@@ -30,12 +31,12 @@ class BrokerUpdate(BaseModel):
 
 @router.get("")
 async def get_brokers():
-    return await list_brokers()
+    return await list_brokers(user_id=require_user_id())
 
 
 @router.post("")
 async def create_broker(data: BrokerCreate):
-    bid = await add_broker(data.name, data.stock_rate, data.stock_min, data.etf_rate, data.etf_min)
+    bid = await add_broker(data.name, data.stock_rate, data.stock_min, data.etf_rate, data.etf_min, user_id=require_user_id())
     return {"id": bid, "message": "created"}
 
 
@@ -49,17 +50,17 @@ async def modify_broker(broker_id: int, data: BrokerUpdate):
             payload.pop("is_default")   # 不允许直接取消默认(会变成0个默认); 改默认请对另一家设 true
     if not payload:
         raise HTTPException(400, "无可改字段")
-    await update_broker(broker_id, **payload)
+    await update_broker(broker_id, **payload, user_id=require_user_id())
     return {"message": "updated"}
 
 
 @router.delete("/{broker_id}")
 async def remove_broker(broker_id: int):
-    rows = await list_brokers()
+    rows = await list_brokers(user_id=require_user_id())
     target = next((b for b in rows if b["id"] == broker_id), None)
     if not target:
         raise HTTPException(404, "券商不存在")
     if target["is_default"]:
         raise HTTPException(400, "默认券商不可删, 请先把别的设为默认")
-    await delete_broker(broker_id)
+    await delete_broker(broker_id, user_id=require_user_id())
     return {"message": "deleted"}

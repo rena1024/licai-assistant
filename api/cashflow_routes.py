@@ -1,5 +1,6 @@
 """月度现金流: 收入 / 固定开销 / 可自由支配 — 与持仓 / 资产端解耦, 纯记账."""
 from __future__ import annotations
+from services.user_context import require_user_id
 from datetime import datetime
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
@@ -43,7 +44,7 @@ def _enrich(row: dict) -> dict:
 
 @router.get("")
 async def list_recent(months: int = 12):
-    rows = await list_cashflow(months)
+    rows = await list_cashflow(months, user_id=require_user_id())
     return {"entries": [_enrich(r) for r in rows], "count": len(rows)}
 
 
@@ -70,10 +71,10 @@ def _safe_avg(rows: list[dict], key: str) -> float:
 async def summary(window: int = 6):
     """最近 N 月平均 + 当月对比 + 储蓄率目标推出的可支配上限 + 3 月均值."""
     window = max(1, min(int(window), 24))
-    rows = await list_cashflow(window)
+    rows = await list_cashflow(window, user_id=require_user_id())
     rate = await _get_rate()
     cur_month = datetime.now().strftime("%Y-%m")
-    current = await get_cashflow(cur_month)
+    current = await get_cashflow(cur_month, user_id=require_user_id())
 
     if not rows:
         return {
@@ -134,7 +135,7 @@ async def set_config_route(cfg: RateConfig):
 
 @router.get("/{month}")
 async def get_one(month: str):
-    row = await get_cashflow(month)
+    row = await get_cashflow(month, user_id=require_user_id())
     if not row:
         raise HTTPException(404, f"月份 {month} 无记录")
     return _enrich(row)
@@ -148,12 +149,12 @@ async def upsert(entry: CashflowEntry):
         entry.month,
         entry.income, entry.fixed_cost, entry.discretionary,
         entry.notes or "",
-    )
-    row = await get_cashflow(entry.month)
+    user_id=require_user_id())
+    row = await get_cashflow(entry.month, user_id=require_user_id())
     return {"message": "已保存", "entry": _enrich(row) if row else None}
 
 
 @router.delete("/{month}")
 async def remove(month: str):
-    await delete_cashflow(month)
+    await delete_cashflow(month, user_id=require_user_id())
     return {"message": "已删除"}

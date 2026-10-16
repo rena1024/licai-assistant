@@ -11,6 +11,7 @@
 组内位次也一并搬: 每个组各有一份顺序, 挂在 watchlist 上时一只票只能有一个位次, 进
 第二个组必然跟第一个组抢。
 """
+from services.user_context import require_user_id
 import asyncio
 import os
 import sqlite3
@@ -32,6 +33,8 @@ def temp_db(monkeypatch):
 def _init(path):
     from database import init_db
     asyncio.run(init_db())
+    from tests.account_helpers import seed_owner
+    asyncio.run(seed_owner())
     return path
 
 
@@ -45,17 +48,17 @@ def _cols(path, table="watchlist"):
 
 def _add(code, name="X", price=10.0):
     from database import add_watchlist
-    asyncio.run(add_watchlist(code, name, price))
+    asyncio.run(add_watchlist(code, name, price, user_id=require_user_id()))
 
 
 def _rows():
     from database import list_watchlist
-    return {r["code"]: r for r in asyncio.run(list_watchlist())}
+    return {r["code"]: r for r in asyncio.run(list_watchlist(user_id=require_user_id()))}
 
 
 def _set(code, groups):
     from database import set_watchlist_groups
-    return asyncio.run(set_watchlist_groups(code, groups))
+    return asyncio.run(set_watchlist_groups(code, groups, user_id=require_user_id()))
 
 
 # ── 一票多组 ────────────────────────────────────────────
@@ -136,7 +139,7 @@ def test_group_order_is_per_group(temp_db):
     for c in ("000001", "000002"):
         _add(c)
         _set(c, ["甲", "乙"])
-    asyncio.run(reorder_watchlist(["000002", "000001"], scope="group", group="甲"))
+    asyncio.run(reorder_watchlist(["000002", "000001"], scope="group", group="甲", user_id=require_user_id()))
     r = _rows()
     assert r["000002"]["group_orders"]["甲"] < r["000001"]["group_orders"]["甲"]
     # 乙组不受影响: 还是先加的在前
@@ -149,7 +152,7 @@ def test_reorder_in_group_adds_membership_without_touching_others(temp_db):
     _init(temp_db)
     _add("000001")
     _set("000001", ["甲"])
-    asyncio.run(reorder_watchlist(["000001"], scope="group", group="乙"))
+    asyncio.run(reorder_watchlist(["000001"], scope="group", group="乙", user_id=require_user_id()))
     assert sorted(_rows()["000001"]["groups"]) == sorted(["甲", "乙"])
 
 
@@ -159,7 +162,7 @@ def test_reorder_global_does_not_touch_groups(temp_db):
     for c in ("000001", "000002"):
         _add(c)
     _set("000001", ["甲"])
-    asyncio.run(reorder_watchlist(["000002", "000001"], scope="global"))
+    asyncio.run(reorder_watchlist(["000002", "000001"], scope="global", user_id=require_user_id()))
     r = _rows()
     assert r["000002"]["sort_order"] < r["000001"]["sort_order"]
     assert r["000001"]["groups"] == ["甲"] and r["000002"]["groups"] == ["自选"]
@@ -170,7 +173,7 @@ def test_reorder_with_blank_group_name_is_a_noop(temp_db):
     from database import reorder_watchlist
     _init(temp_db)
     _add("000001")
-    asyncio.run(reorder_watchlist(["000001"], scope="group", group=""))
+    asyncio.run(reorder_watchlist(["000001"], scope="group", group="", user_id=require_user_id()))
     assert _rows()["000001"]["groups"] == ["自选"]
 
 
@@ -181,7 +184,7 @@ def test_reorder_in_default_group_writes_its_own_order(temp_db):
     for c in ("000001", "000002"):
         _add(c)
     before = {c: _rows()[c]["sort_order"] for c in ("000001", "000002")}
-    asyncio.run(reorder_watchlist(["000002", "000001"], scope="group", group="自选"))
+    asyncio.run(reorder_watchlist(["000002", "000001"], scope="group", group="自选", user_id=require_user_id()))
     r = _rows()
     assert r["000002"]["group_orders"]["自选"] < r["000001"]["group_orders"]["自选"]
     assert {c: r[c]["sort_order"] for c in ("000001", "000002")} == before
@@ -193,7 +196,7 @@ def test_removing_from_watchlist_drops_group_rows(temp_db):
     _init(temp_db)
     _add("600519")
     _set("600519", ["金矿"])
-    asyncio.run(remove_watchlist("600519"))
+    asyncio.run(remove_watchlist("600519", user_id=require_user_id()))
     _add("600519")
     assert _rows()["600519"]["groups"] == ["自选"]          # 只剩默认组, 金矿没复活
 
@@ -220,25 +223,25 @@ def test_migration_moves_groups_and_drops_the_old_columns(temp_db):
     _legacy_db(temp_db, [("601138", "工业富联", "高端内存", 0, 5),
                          ("600547", "山东黄金", "金矿", 1, 2),
                          ("000001", "平安银行", "", 2, 0)])
-    _init(temp_db)
-    r = _rows()
-    assert r["601138"]["groups"] == ["高端内存"]
-    assert r["601138"]["group_orders"]["高端内存"] == 5      # 组内位次一起搬, 顺序不重置
-    assert r["600547"]["groups"] == ["金矿"]
-    assert r["000001"]["groups"] == ["自选"]                 # 老的空串 = 补进默认组
-    assert r["000001"]["sort_order"] == 2                    # 全局位次原样保留
-    # 老列必须没了: 留着就是第二本账
-    assert "grp" not in _cols(temp_db) and "group_order" not in _cols(temp_db)
-    assert "sort_order" in _cols(temp_db)
+    from services.runtime_paths import RuntimePathError
+    with open(temp_db, 'rb') as source:
+        before = source.read()
+    with pytest.raises(RuntimePathError, match='无归属|历史'):
+        _init(temp_db)
+    with open(temp_db, 'rb') as source:
+        assert source.read() == before
 
 
 def test_migration_does_not_resurrect_a_group_the_user_removed(temp_db):
     """搬完再启动一次不能照着老列重搬 —— 那会把用户后来移出的分组复活。"""
     _legacy_db(temp_db, [("601138", "工业富联", "高端内存", 0, 0)])
-    _init(temp_db)
-    _set("601138", ["自选"])                # 用户把它移出高端内存
-    _init(temp_db)                         # 再启动一次
-    assert _rows()["601138"]["groups"] == ["自选"]
+    from services.runtime_paths import RuntimePathError
+    with open(temp_db, 'rb') as source:
+        before = source.read()
+    with pytest.raises(RuntimePathError, match='无归属|历史'):
+        _init(temp_db)
+    with open(temp_db, 'rb') as source:
+        assert source.read() == before
 
 
 def test_migration_survives_when_the_old_columns_cannot_be_dropped(temp_db):
@@ -250,12 +253,13 @@ def test_migration_survives_when_the_old_columns_cannot_be_dropped(temp_db):
     con.execute("CREATE INDEX ix_wl_grp ON watchlist(grp)")
     con.commit(); con.close()
 
-    _init(temp_db)
-    assert _rows()["601138"]["groups"] == ["高端内存"]     # 分组照样搬到位
-    assert "grp" in _cols(temp_db)                         # 列确实没删掉
-    _set("601138", ["自选"])
-    _init(temp_db)
-    assert _rows()["601138"]["groups"] == ["自选"]          # 但高端内存不会复活
+    from services.runtime_paths import RuntimePathError
+    with open(temp_db, 'rb') as source:
+        before = source.read()
+    with pytest.raises(RuntimePathError, match='无归属|历史'):
+        _init(temp_db)
+    with open(temp_db, 'rb') as source:
+        assert source.read() == before
 
 
 def test_migration_is_idempotent_on_a_new_db(temp_db):

@@ -105,6 +105,8 @@
 
 ### A05：现金流、定投、券商与个人策略归属
 
+**执行状态：** 已完成（2026-10-16）；后端 834 项通过，见 [A05 验收](../../../tasks/evidence/a05.md)。整体 A 完成后统一 review。
+
 **依赖：** A04。  **输入：** 已验收依赖接口及需求对应规则。
 
 **文件：** database.py；api/cashflow_routes.py；api/dca_routes.py；api/broker_routes.py；api/settings_routes.py。新增测试：`tests/test_ownership_settings.py`；涉及交互时补 `frontend/src/__tests__/ownership_settings.test.jsx`。

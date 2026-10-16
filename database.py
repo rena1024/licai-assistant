@@ -11,6 +11,7 @@ from services.runtime_paths import database_path, get_runtime_paths, LAYOUT_VERS
 DEFAULT_WATCH_GROUP = "自选"
 ACCOUNT_SCHEMA_VERSION = "1"
 PORTFOLIO_SCHEMA_VERSION = "1"
+OWNED_SETTINGS_TABLES = ('alert_config', 'custom_alerts', 'unwind_plans', 'unwind_tranches', 'watchlist', 'watchlist_group', 'cashflow_monthly', 'position_thesis', 'thesis_revision', 'brokers')
 OWNED_PORTFOLIO_TABLES = ("external_asset_actions", "position_actions", "trade_log", "external_assets", "holdings", "portfolio_snapshots", "morning_briefings")
 # 首次启动自动插入的模板不是用户配置；初始化保护据此识别被修改的无归属费率。
 DEFAULT_BROKERS = (
@@ -37,6 +38,16 @@ def resolve_action_time(action: dict) -> str:
     return ""
 
 SCHEMA = """
+CREATE TABLE IF NOT EXISTS user_settings (
+ user_id INTEGER NOT NULL REFERENCES users(id),
+ key TEXT NOT NULL, value TEXT NOT NULL, PRIMARY KEY(user_id,key)
+);
+CREATE TABLE IF NOT EXISTS brokers (
+ id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL REFERENCES users(id),
+ name TEXT NOT NULL, stock_rate REAL NOT NULL, stock_min REAL NOT NULL,
+ etf_rate REAL NOT NULL, etf_min REAL NOT NULL, is_default INTEGER NOT NULL DEFAULT 0,
+ UNIQUE(user_id,name)
+);
 CREATE TABLE IF NOT EXISTS holdings (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     user_id INTEGER NOT NULL REFERENCES users(id),
@@ -62,14 +73,16 @@ CREATE TABLE IF NOT EXISTS trade_log (
 );
 
 CREATE TABLE IF NOT EXISTS alert_config (
+    user_id INTEGER NOT NULL REFERENCES users(id),
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    stock_code TEXT NOT NULL UNIQUE,
+    stock_code TEXT NOT NULL,
     buy_zone_low REAL,
     buy_zone_high REAL,
     sell_zone_low REAL,
     sell_zone_high REAL,
     enabled INTEGER DEFAULT 1,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(user_id, stock_code)
 );
 
 CREATE TABLE IF NOT EXISTS kline_cache (
@@ -82,6 +95,7 @@ CREATE TABLE IF NOT EXISTS kline_cache (
 );
 
 CREATE TABLE IF NOT EXISTS custom_alerts (
+    user_id INTEGER NOT NULL REFERENCES users(id),
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     stock_code TEXT NOT NULL,
     alert_type TEXT NOT NULL,
@@ -98,15 +112,18 @@ CREATE TABLE IF NOT EXISTS app_config (
 );
 
 CREATE TABLE IF NOT EXISTS unwind_plans (
-    stock_code TEXT PRIMARY KEY,
+    user_id INTEGER NOT NULL REFERENCES users(id),
+    stock_code TEXT NOT NULL,
     total_budget REAL NOT NULL,
     used_budget REAL DEFAULT 0,
     status TEXT DEFAULT 'active',
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(user_id, stock_code)
 );
 
 CREATE TABLE IF NOT EXISTS unwind_tranches (
+    user_id INTEGER NOT NULL REFERENCES users(id),
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     stock_code TEXT NOT NULL,
     idx INTEGER NOT NULL,
@@ -175,12 +192,14 @@ CREATE TABLE IF NOT EXISTS portfolio_snapshots (
 
 -- 自选观察池(在跟踪但未必持有的票)。分组不在这张表上, 见 watchlist_group。
 CREATE TABLE IF NOT EXISTS watchlist (
-    stock_code TEXT PRIMARY KEY,
+    user_id INTEGER NOT NULL REFERENCES users(id),
+    stock_code TEXT NOT NULL,
     stock_name TEXT,
     added_at TEXT,                       -- YYYY-MM-DD
     added_price REAL,                    -- 加自选时现价(看"自选以来"涨跌)
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    sort_order REAL DEFAULT 0            -- 全局手动位次(「全部」视图用; 与分组无关)
+    sort_order REAL DEFAULT 0,            -- 全局手动位次(「全部」视图用; 与分组无关)
+    UNIQUE(user_id, stock_code)
 );
 
 -- 观察池的分组成员表: 一行 = 这只票在这个分组里。一票多组。
@@ -189,11 +208,12 @@ CREATE TABLE IF NOT EXISTS watchlist (
 -- 上的话一只票只能有一个位次, 进第二个组就必然跟第一个组抢。
 -- 默认组「自选」在这张表里没有行: 一只票在本表里查不到任何分组 = 还没归组。
 CREATE TABLE IF NOT EXISTS watchlist_group (
+    user_id INTEGER NOT NULL REFERENCES users(id),
     stock_code TEXT NOT NULL,
     grp TEXT NOT NULL,                   -- 分组名(非空; 空串是"未归组", 不占行)
     group_order REAL DEFAULT 0,          -- 该组内的手动位次(各组独立)
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    PRIMARY KEY (stock_code, grp)
+    PRIMARY KEY (user_id, stock_code, grp)
 );
 
 -- 全市场代码↔名称字典(个股 + 场内基金): 搜股的匹配底表。
@@ -294,13 +314,15 @@ CREATE INDEX IF NOT EXISTS idx_tag_date ON stock_tag(snap_date);
 CREATE INDEX IF NOT EXISTS idx_tag_code ON stock_tag(stock_code);
 
 CREATE TABLE IF NOT EXISTS cashflow_monthly (
-    month TEXT PRIMARY KEY,             -- YYYY-MM
+    user_id INTEGER NOT NULL REFERENCES users(id),
+    month TEXT NOT NULL,             -- YYYY-MM
     income REAL DEFAULT 0,              -- 月收入(税后)
     fixed_cost REAL DEFAULT 0,          -- 固定开销 (房租/餐饮/账单/还贷)
     discretionary REAL DEFAULT 0,       -- 实际可自由支配开销 (购物/娱乐/旅行)
     notes TEXT DEFAULT '',
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(user_id, month)
 );
 
 -- 外部资产 (基金/加密/理财/现金) 的交易流水, 用于 FIFO 算实现盈亏.
@@ -342,11 +364,13 @@ CREATE INDEX IF NOT EXISTS idx_dca_status_due ON dca_schedules (status, next_due
 
 -- 持仓逻辑跟踪: 记录"当初为什么买这只", 供复盘客观对照逻辑是否还成立 (A股 + 场内外资产共用 code)。
 CREATE TABLE IF NOT EXISTS position_thesis (
-    code TEXT PRIMARY KEY,                    -- 股票/基金代码 (裸码, 如 600519 / 159516)
+    user_id INTEGER NOT NULL REFERENCES users(id),
+    code TEXT NOT NULL,                    -- 股票/基金代码 (裸码, 如 600519 / 159516)
     name TEXT DEFAULT '',
     thesis TEXT NOT NULL,                     -- 买入逻辑 (为什么买、看中什么、预期)
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(user_id, code)
 );
 
 -- 逻辑修订史(append-only)。position_thesis 只留最新一版, 覆盖写会把"改过什么"这件事本身抹掉 ——
@@ -354,13 +378,14 @@ CREATE TABLE IF NOT EXISTS position_thesis (
 -- 只见一句自洽的逻辑, 看不见它被改过三次。facts 存"写这段话那一刻的客观事实快照", 有它才分得清
 -- 「事实变了所以改逻辑」和「事实没变只是改了说法」。
 CREATE TABLE IF NOT EXISTS thesis_revision (
+    user_id INTEGER NOT NULL REFERENCES users(id),
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     code TEXT NOT NULL,
     rev INTEGER NOT NULL,                     -- 1 起递增
     thesis TEXT NOT NULL,
     facts TEXT DEFAULT '',                    -- JSON 快照; '' = 当时没记(老数据/取数失败), 不是"没变化"
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    UNIQUE(code, rev)
+    UNIQUE(user_id, code, rev)
 );
 CREATE INDEX IF NOT EXISTS idx_thesis_rev_code ON thesis_revision(code, rev);
 
@@ -489,17 +514,21 @@ async def get_db() -> aiosqlite.Connection:
         path.touch(mode=0o600, exist_ok=True)
     db = await aiosqlite.connect(path)
     db.row_factory = aiosqlite.Row
-    await db.execute("PRAGMA foreign_keys = ON")
+    await db.execute('PRAGMA foreign_keys = ON')
     return db
 
 
 async def _portfolio_upgrade_tables(db) -> list[str]:
     """只升级空的旧业务表；账号信息保持原样，不猜测历史业务 owner。"""
     old = []
-    for table in OWNED_PORTFOLIO_TABLES:
+    for table in OWNED_PORTFOLIO_TABLES + OWNED_SETTINGS_TABLES:
         columns = await (await db.execute(f'PRAGMA table_info("{table}")')).fetchall()
         if columns and 'user_id' not in {row['name'] for row in columns}:
-            if await (await db.execute(f'SELECT 1 FROM "{table}" LIMIT 1')).fetchone():
+            if table == 'brokers':
+                rows = await (await db.execute('SELECT name, stock_rate, stock_min, etf_rate, etf_min, is_default FROM brokers ORDER BY id')).fetchall()
+                if rows and [tuple(r) for r in rows] != list(DEFAULT_BROKERS):
+                    raise RuntimePathError('发现无归属历史券商配置')
+            elif await (await db.execute(f'SELECT 1 FROM "{table}" LIMIT 1')).fetchone():
                 raise RuntimePathError('发现无归属历史业务数据，请使用新的空运行目录，不自动分配给管理员')
             old.append(table)
     metadata = await (await db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='runtime_metadata'")).fetchone()
@@ -526,174 +555,107 @@ async def init_db():
         await db.executescript(ACCOUNT_SCHEMA)
         drops = ''.join(f'DROP TABLE "{table}";\n' for table in old_tables)
         await db.executescript('BEGIN IMMEDIATE;\n' + drops + SCHEMA + '\nCOMMIT;')
-        await db.execute("CREATE TABLE IF NOT EXISTS runtime_metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
+        await db.execute('CREATE TABLE IF NOT EXISTS runtime_metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL)')
         await db.execute("INSERT OR IGNORE INTO runtime_metadata VALUES ('layout_version', ?)", (LAYOUT_VERSION,))
         await db.execute("INSERT OR IGNORE INTO runtime_metadata VALUES ('account_schema_version', ?)", (ACCOUNT_SCHEMA_VERSION,))
         await db.execute("INSERT OR IGNORE INTO runtime_metadata VALUES ('portfolio_schema_version', ?)", (PORTFOLIO_SCHEMA_VERSION,))
         # Migration: add trade_date to position_actions if missing
-        cursor = await db.execute("PRAGMA table_info(position_actions)")
+        cursor = await db.execute('PRAGMA table_info(position_actions)')
         cols = {row[1] for row in await cursor.fetchall()}
         if "trade_date" not in cols:
-            await db.execute("ALTER TABLE position_actions ADD COLUMN trade_date TEXT")
+            await db.execute('ALTER TABLE position_actions ADD COLUMN trade_date TEXT')
         if "fee" not in cols:
             # NULL = 用 estimate_trade_fee 自动算; 非 NULL = 用户手填覆盖
-            await db.execute("ALTER TABLE position_actions ADD COLUMN fee REAL")
+            await db.execute('ALTER TABLE position_actions ADD COLUMN fee REAL')
         if "trade_time" not in cols:
             # 成交时刻 HH:MM (可选); NULL → 用 created_at(转北京时间)推断, 供分时图精准打 B/S 点
-            await db.execute("ALTER TABLE position_actions ADD COLUMN trade_time TEXT")
+            await db.execute('ALTER TABLE position_actions ADD COLUMN trade_time TEXT')
         if "broker" not in cols:
             # 本笔成交的券商 (可选); NULL → 用持仓默认券商。支持同股跨券商, 手续费按各自费率
-            await db.execute("ALTER TABLE position_actions ADD COLUMN broker TEXT")
+            await db.execute('ALTER TABLE position_actions ADD COLUMN broker TEXT')
         if "fx_rate" not in cols:
             # 港美股成交日汇率(每 1 原币折人民币); NULL → 按当前汇率折算(A 股不用)
-            await db.execute("ALTER TABLE position_actions ADD COLUMN fx_rate REAL")
+            await db.execute('ALTER TABLE position_actions ADD COLUMN fx_rate REAL')
         # Migration: kline_cache 加成交额列(老库只有 volume)
-        cursor = await db.execute("PRAGMA table_info(kline_cache)")
+        cursor = await db.execute('PRAGMA table_info(kline_cache)')
         kc_cols = {row[1] for row in await cursor.fetchall()}
         if "amount" not in kc_cols:
-            await db.execute("ALTER TABLE kline_cache ADD COLUMN amount REAL DEFAULT 0")
-        # Migration: 自选加「全局手动排序」(老库建表时没有这列)
-        cursor = await db.execute("PRAGMA table_info(watchlist)")
-        wl_cols = {row[1] for row in await cursor.fetchall()}
-        if "sort_order" not in wl_cols:
-            await db.execute("ALTER TABLE watchlist ADD COLUMN sort_order REAL DEFAULT 0")
-            # 老数据按加入时间倒序给初始位次, 保持用户当前看到的顺序不变
-            await db.execute(
-                "UPDATE watchlist SET sort_order = (SELECT COUNT(*) FROM watchlist w2 "
-                "WHERE w2.created_at > watchlist.created_at)")
-        # Migration: 分组从 watchlist.grp/group_order 两列搬到 watchlist_group 关联表(一票多组)。
-        # 搬完必须把老列去掉: 留着就是第二本账, 以后谁读到的都是搬迁那一刻的快照。而删列
-        # 之前得先把上面的 ADD COLUMN 兜底去掉, 否则下次启动又原样加回来。
-        if "grp" in wl_cols:
-            await db.execute(
-                "INSERT OR IGNORE INTO watchlist_group (stock_code, grp, group_order) "
-                "SELECT stock_code, grp, COALESCE(group_order, 0) FROM watchlist "
-                "WHERE COALESCE(grp, '') <> ''")
-            cursor = await db.execute(
-                "SELECT (SELECT COUNT(*) FROM watchlist WHERE COALESCE(grp,'') <> ''), "
-                "(SELECT COUNT(*) FROM watchlist w JOIN watchlist_group g "
-                " ON g.stock_code = w.stock_code AND g.grp = w.grp "
-                " WHERE COALESCE(w.grp,'') <> '')")
-            expect, moved = await cursor.fetchone()
-            if moved >= expect:                      # 逐行核对搬到位了才动老列
-                try:
-                    await db.execute("ALTER TABLE watchlist DROP COLUMN grp")
-                    await db.execute("ALTER TABLE watchlist DROP COLUMN group_order")
-                except Exception:
-                    # SQLite < 3.35 没有 DROP COLUMN: 列留着但没人读。清空值, 否则下次
-                    # 启动又照着老列搬一遍 —— 会把用户后来移出的分组复活。
-                    await db.execute("UPDATE watchlist SET grp = ''")
-        # Migration(一次性): 把「还没归组」的票补进默认组「自选」。
-        # 「自选」是一个真实分组, 不是"没有分组" —— 一只票可以同时在「自选」和「金矿」里。
-        # 只能跑一次: 跑第二遍会把用户后来从「自选」里取消勾选的票又塞回去(他明确只想留
-        # 「金矿」)。所以拿 app_config 一个键当一次性闸门, 而不是"看它有没有分组"。
-        cursor = await db.execute(
-            "SELECT value FROM app_config WHERE key = 'watchlist_default_group_filled'")
-        if not await cursor.fetchone():
-            await db.execute(
-                "INSERT OR IGNORE INTO watchlist_group (stock_code, grp, group_order) "
-                "SELECT w.stock_code, ?, COALESCE(w.sort_order, 0) FROM watchlist w "
-                "WHERE NOT EXISTS (SELECT 1 FROM watchlist_group g WHERE g.stock_code = w.stock_code)",
-                (DEFAULT_WATCH_GROUP,))
-            await db.execute(
-                "INSERT OR IGNORE INTO app_config (key, value) VALUES "
-                "('watchlist_default_group_filled', '1')")
+            await db.execute('ALTER TABLE kline_cache ADD COLUMN amount REAL DEFAULT 0')
         # Migration: add trade_time to external_asset_actions
-        cursor = await db.execute("PRAGMA table_info(external_asset_actions)")
+        cursor = await db.execute('PRAGMA table_info(external_asset_actions)')
         eaa_cols = {row[1] for row in await cursor.fetchall()}
         if "trade_time" not in eaa_cols:
-            await db.execute("ALTER TABLE external_asset_actions ADD COLUMN trade_time TEXT")
+            await db.execute('ALTER TABLE external_asset_actions ADD COLUMN trade_time TEXT')
         # Migration: add purchase_date to holdings if missing (reserved for future)
-        cursor = await db.execute("PRAGMA table_info(holdings)")
+        cursor = await db.execute('PRAGMA table_info(holdings)')
         cols = {row[1] for row in await cursor.fetchall()}
         if "purchase_date" not in cols:
-            await db.execute("ALTER TABLE holdings ADD COLUMN purchase_date TEXT")
+            await db.execute('ALTER TABLE holdings ADD COLUMN purchase_date TEXT')
         # Migration: add sold_back fields to unwind_tranches for T-sell tracking
-        cursor = await db.execute("PRAGMA table_info(unwind_tranches)")
+        cursor = await db.execute('PRAGMA table_info(unwind_tranches)')
         cols = {row[1] for row in await cursor.fetchall()}
         if "sold_back_price" not in cols:
-            await db.execute("ALTER TABLE unwind_tranches ADD COLUMN sold_back_price REAL")
+            await db.execute('ALTER TABLE unwind_tranches ADD COLUMN sold_back_price REAL')
         if "sold_back_at" not in cols:
-            await db.execute("ALTER TABLE unwind_tranches ADD COLUMN sold_back_at TIMESTAMP")
+            await db.execute('ALTER TABLE unwind_tranches ADD COLUMN sold_back_at TIMESTAMP')
         # Migration: add okx_algo_id + okx_bot_type to external_assets for auto-sync
-        cursor = await db.execute("PRAGMA table_info(external_assets)")
+        cursor = await db.execute('PRAGMA table_info(external_assets)')
         cols = {row[1] for row in await cursor.fetchall()}
         if "okx_algo_id" not in cols:
-            await db.execute("ALTER TABLE external_assets ADD COLUMN okx_algo_id TEXT")
+            await db.execute('ALTER TABLE external_assets ADD COLUMN okx_algo_id TEXT')
         if "okx_bot_type" not in cols:
-            await db.execute("ALTER TABLE external_assets ADD COLUMN okx_bot_type TEXT")
+            await db.execute('ALTER TABLE external_assets ADD COLUMN okx_bot_type TEXT')
         # WEALTH 类型用：年化收益率 + 起投日 → 自动算当前总额
         if "annual_yield_rate" not in cols:
-            await db.execute("ALTER TABLE external_assets ADD COLUMN annual_yield_rate REAL")
+            await db.execute('ALTER TABLE external_assets ADD COLUMN annual_yield_rate REAL')
         if "start_date" not in cols:
-            await db.execute("ALTER TABLE external_assets ADD COLUMN start_date TEXT")
+            await db.execute('ALTER TABLE external_assets ADD COLUMN start_date TEXT')
         # 基金/加密 待确认份额：买了但份额还没结算
         if "pending_amount" not in cols:
-            await db.execute("ALTER TABLE external_assets ADD COLUMN pending_amount REAL DEFAULT 0")
+            await db.execute('ALTER TABLE external_assets ADD COLUMN pending_amount REAL DEFAULT 0')
         # OKX 马丁实际总预算 (USDT). raw 字段没"总预算", 算法反推不准, 让用户手填覆盖.
         if "bot_budget_override_usdt" not in cols:
-            await db.execute("ALTER TABLE external_assets ADD COLUMN bot_budget_override_usdt REAL")
+            await db.execute('ALTER TABLE external_assets ADD COLUMN bot_budget_override_usdt REAL')
         # 基金申购费率 (小数, 如 0.0015 = 0.15%). C 类/无申购费 = 0/NULL. 批量结算时内扣算份额。
         if "purchase_fee_rate" not in cols:
-            await db.execute("ALTER TABLE external_assets ADD COLUMN purchase_fee_rate REAL")
+            await db.execute('ALTER TABLE external_assets ADD COLUMN purchase_fee_rate REAL')
 
-        # 券商费率档案
-        await db.execute("""
-            CREATE TABLE IF NOT EXISTS brokers (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                name TEXT UNIQUE NOT NULL,
-                stock_rate REAL NOT NULL,
-                stock_min REAL NOT NULL,
-                etf_rate REAL NOT NULL,
-                etf_min REAL NOT NULL,
-                is_default INTEGER NOT NULL DEFAULT 0
-            )
-        """)
-        cur = await db.execute("SELECT COUNT(*) FROM brokers")
-        if (await cur.fetchone())[0] == 0:
-            await db.executemany(
-                "INSERT INTO brokers (name, stock_rate, stock_min, etf_rate, etf_min, is_default) VALUES (?,?,?,?,?,?)",
-                DEFAULT_BROKERS[:2])
-        # 港美股券商(港美股费用走 services/market_fees.py 的收费方案, 这里的 A 股费率只在它代买 A 股时用)
-        await db.execute(
-            "INSERT OR IGNORE INTO brokers (name, stock_rate, stock_min, etf_rate, etf_min, is_default) VALUES (?,?,?,?,?,?)",
-            DEFAULT_BROKERS[2])
-        cur = await db.execute("PRAGMA table_info(holdings)")
+        cur = await db.execute('PRAGMA table_info(holdings)')
         hcols = {r[1] for r in await cur.fetchall()}
         if "broker" not in hcols:
-            await db.execute("ALTER TABLE holdings ADD COLUMN broker TEXT")
-        cur = await db.execute("PRAGMA table_info(external_assets)")
+            await db.execute('ALTER TABLE holdings ADD COLUMN broker TEXT')
+        cur = await db.execute('PRAGMA table_info(external_assets)')
         ecols = {r[1] for r in await cur.fetchall()}
         if "broker" not in ecols:
-            await db.execute("ALTER TABLE external_assets ADD COLUMN broker TEXT")
+            await db.execute('ALTER TABLE external_assets ADD COLUMN broker TEXT')
         # 平仓归档(BOT/策略止损结束等): closed=1 退出在持, closed_realized 记平仓时已实现盈亏(CNY)
         if "closed" not in ecols:
-            await db.execute("ALTER TABLE external_assets ADD COLUMN closed INTEGER DEFAULT 0")
+            await db.execute('ALTER TABLE external_assets ADD COLUMN closed INTEGER DEFAULT 0')
         if "closed_realized" not in ecols:
-            await db.execute("ALTER TABLE external_assets ADD COLUMN closed_realized REAL")
+            await db.execute('ALTER TABLE external_assets ADD COLUMN closed_realized REAL')
         if "closed_date" not in ecols:
-            await db.execute("ALTER TABLE external_assets ADD COLUMN closed_date TEXT")
+            await db.execute('ALTER TABLE external_assets ADD COLUMN closed_date TEXT')
 
         # external_asset_actions: status 字段 + fee 字段 (旧库迁移)
-        cursor = await db.execute("PRAGMA table_info(external_asset_actions)")
+        cursor = await db.execute('PRAGMA table_info(external_asset_actions)')
         cols = {row[1] for row in await cursor.fetchall()}
         if cols and "status" not in cols:
             await db.execute("ALTER TABLE external_asset_actions ADD COLUMN status TEXT DEFAULT 'confirmed'")
         if cols and "fee" not in cols:
             # 手续费 (CNY), 包含在 amount 里 (amount = 总付出含费), 单存方便看净额
-            await db.execute("ALTER TABLE external_asset_actions ADD COLUMN fee REAL DEFAULT 0")
+            await db.execute('ALTER TABLE external_asset_actions ADD COLUMN fee REAL DEFAULT 0')
         if cols and "interest_part" not in cols:
             # WEALTH/CASH 赎回时拆分: amount 里有多少是利息. NULL=不区分(走 FIFO 兜底)
-            await db.execute("ALTER TABLE external_asset_actions ADD COLUMN interest_part REAL")
+            await db.execute('ALTER TABLE external_asset_actions ADD COLUMN interest_part REAL')
 
         # dca_schedules: 旧库迁移 frequency / day_of_week / day_of_month nullable
-        cursor = await db.execute("PRAGMA table_info(dca_schedules)")
+        cursor = await db.execute('PRAGMA table_info(dca_schedules)')
         cols = {row[1] for row in await cursor.fetchall()}
         if cols:
             if "frequency" not in cols:
                 await db.execute("ALTER TABLE dca_schedules ADD COLUMN frequency TEXT NOT NULL DEFAULT 'monthly'")
             if "day_of_week" not in cols:
-                await db.execute("ALTER TABLE dca_schedules ADD COLUMN day_of_week INTEGER")
+                await db.execute('ALTER TABLE dca_schedules ADD COLUMN day_of_week INTEGER')
         await db.commit()
 
         # Seed: any holding without a position_action → create initial BUY action
@@ -747,19 +709,7 @@ async def init_db():
             print(f"[migration] Seeded {action_type} for asset#{asset_id} ({atype}): ¥{cost} on {seed_date}")
         await db.commit()
 
-        # Seed thesis_revision: 已有的买入逻辑补一条 rev=1。
-        # facts 留空是刻意的 —— 那时候没存快照, 编一个"用今天的数字当第一版事实"会让漂移分析
-        # 把这段时间的变化全算成 0。空快照在下游被显式当作"当时没记"。
-        cursor = await db.execute(
-            "SELECT code, thesis, created_at FROM position_thesis t "
-            "WHERE NOT EXISTS (SELECT 1 FROM thesis_revision r WHERE r.code = t.code)")
-        rows = await cursor.fetchall()
-        for r in rows:
-            await db.execute(
-                "INSERT INTO thesis_revision (code, rev, thesis, facts, created_at) VALUES (?, 1, ?, '', ?)",
-                (r["code"], r["thesis"], r["created_at"]),
-            )
-            print(f"[migration] Seeded thesis rev1 for {r['code']} (无事实快照)")
+        await db.execute("INSERT INTO thesis_revision(user_id,code,rev,thesis,facts,created_at) SELECT t.user_id,t.code,1,t.thesis,'',t.created_at FROM position_thesis t WHERE NOT EXISTS (SELECT 1 FROM thesis_revision r WHERE r.user_id=t.user_id AND r.code=t.code)")
         await db.commit()
     finally:
         await db.close()
@@ -771,7 +721,7 @@ async def get_all_holdings(*, user_id: int) -> list[dict]:
     validate_user_id(user_id)
     db = await get_db()
     try:
-        cursor = await db.execute("SELECT * FROM holdings WHERE user_id = ? ORDER BY stock_code", (user_id,))
+        cursor = await db.execute('SELECT * FROM holdings WHERE user_id = ? ORDER BY stock_code', (user_id,))
         rows = await cursor.fetchall()
         return [dict(row) for row in rows]
     finally:
@@ -782,7 +732,7 @@ async def get_holding(stock_code: str, *, user_id: int) -> dict | None:
     validate_user_id(user_id)
     db = await get_db()
     try:
-        cursor = await db.execute("SELECT * FROM holdings WHERE stock_code = ? AND user_id = ?", (stock_code, user_id))
+        cursor = await db.execute('SELECT * FROM holdings WHERE stock_code = ? AND user_id = ?', (stock_code, user_id))
         row = await cursor.fetchone()
         return dict(row) if row else None
     finally:
@@ -831,7 +781,7 @@ async def delete_holding(stock_code: str, *, user_id: int):
     validate_user_id(user_id)
     db = await get_db()
     try:
-        await db.execute("DELETE FROM holdings WHERE stock_code = ? AND user_id = ?", (stock_code, user_id))
+        await db.execute('DELETE FROM holdings WHERE stock_code = ? AND user_id = ?', (stock_code, user_id))
         await db.commit()
     finally:
         await db.close()
@@ -905,7 +855,7 @@ async def update_ask_run(run_id: str, events_json: str, status: str, answered: b
 async def get_ask_run(run_id: str) -> dict | None:
     db = await get_db()
     try:
-        cur = await db.execute("SELECT * FROM ask_run WHERE run_id = ?", (run_id,))
+        cur = await db.execute('SELECT * FROM ask_run WHERE run_id = ?', (run_id,))
         r = await cur.fetchone()
         return dict(r) if r else None
     finally:
@@ -1037,48 +987,49 @@ async def save_klines(stock_code: str, rows: list[dict]):
 
 # --- Custom Alerts ---
 
-async def get_custom_alerts(stock_code: str = None, enabled_only: bool = True) -> list[dict]:
+async def get_custom_alerts(stock_code: str=None, enabled_only: bool=True, *, user_id: int) -> list[dict]:
+    validate_user_id(user_id)
     db = await get_db()
     try:
-        where = []
-        params = []
+        where = ['user_id = ?']
+        params = [user_id]
         if stock_code:
-            where.append("stock_code = ?")
+            where.append('stock_code = ?')
             params.append(stock_code)
         if enabled_only:
-            where.append("enabled = 1 AND triggered = 0")
-        clause = f"WHERE {' AND '.join(where)}" if where else ""
-        cursor = await db.execute(f"SELECT * FROM custom_alerts {clause} ORDER BY created_at DESC", params)
+            where.append('enabled = 1 AND triggered = 0')
+        clause = f"WHERE {' AND '.join(where)}" if where else ''
+        cursor = await db.execute(f'SELECT * FROM custom_alerts {clause} WHERE user_id = ? ORDER BY created_at DESC', (user_id, *params))
         return [dict(r) for r in await cursor.fetchall()]
     finally:
         await db.close()
 
 
-async def add_custom_alert(stock_code: str, alert_type: str, price: float, message: str = ""):
+async def add_custom_alert(stock_code: str, alert_type: str, price: float, message: str='', *, user_id: int):
+    validate_user_id(user_id)
     db = await get_db()
     try:
-        await db.execute(
-            "INSERT INTO custom_alerts (stock_code, alert_type, price, message) VALUES (?, ?, ?, ?)",
-            (stock_code, alert_type, price, message),
-        )
+        await db.execute('INSERT INTO custom_alerts (user_id, stock_code, alert_type, price, message) VALUES (?, ?, ?, ?, ?)', (user_id, stock_code, alert_type, price, message))
         await db.commit()
     finally:
         await db.close()
 
 
-async def mark_alert_triggered(alert_id: int):
+async def mark_alert_triggered(alert_id: int, *, user_id: int):
+    validate_user_id(user_id)
     db = await get_db()
     try:
-        await db.execute("UPDATE custom_alerts SET triggered = 1 WHERE id = ?", (alert_id,))
+        await db.execute('UPDATE custom_alerts SET triggered = 1 WHERE user_id = ? AND id = ?', (*(alert_id,)[:-1], user_id, *(alert_id,)[-1:]))
         await db.commit()
     finally:
         await db.close()
 
 
-async def delete_custom_alert(alert_id: int):
+async def delete_custom_alert(alert_id: int, *, user_id: int):
+    validate_user_id(user_id)
     db = await get_db()
     try:
-        await db.execute("DELETE FROM custom_alerts WHERE id = ?", (alert_id,))
+        await db.execute('DELETE FROM custom_alerts WHERE user_id = ? AND id = ?', (user_id, alert_id))
         await db.commit()
     finally:
         await db.close()
@@ -1086,17 +1037,23 @@ async def delete_custom_alert(alert_id: int):
 
 # --- App Config ---
 
-async def get_config(key: str) -> str | None:
+async def get_config(key: str, *, user_id: int | None = None) -> str | None:
+    if user_id is not None or key in PRIVATE_SETTING_KEYS:
+        from services.user_context import require_user_id
+        return await get_user_setting(key, user_id=validate_user_id(user_id) if user_id is not None else require_user_id())
     db = await get_db()
     try:
-        cursor = await db.execute("SELECT value FROM app_config WHERE key = ?", (key,))
+        cursor = await db.execute('SELECT value FROM app_config WHERE key = ?', (key,))
         row = await cursor.fetchone()
         return row["value"] if row else None
     finally:
         await db.close()
 
 
-async def set_config(key: str, value: str):
+async def set_config(key: str, value: str, *, user_id: int | None = None):
+    if user_id is not None or key in PRIVATE_SETTING_KEYS:
+        from services.user_context import require_user_id
+        return await set_user_setting(key, value, user_id=validate_user_id(user_id) if user_id is not None else require_user_id())
     db = await get_db()
     try:
         await db.execute(
@@ -1109,76 +1066,71 @@ async def set_config(key: str, value: str):
 
 
 # ── 持仓逻辑 (thesis) ──
-async def get_thesis(code: str) -> dict | None:
+async def get_thesis(code: str, *, user_id: int) -> dict | None:
+    validate_user_id(user_id)
     db = await get_db()
     try:
-        cur = await db.execute("SELECT * FROM position_thesis WHERE code = ?", (code,))
+        cur = await db.execute('SELECT * FROM position_thesis WHERE user_id = ? AND code = ?', (user_id, code))
         row = await cur.fetchone()
         return dict(row) if row else None
     finally:
         await db.close()
 
 
-async def list_theses() -> list[dict]:
+async def list_theses(*, user_id: int) -> list[dict]:
+    validate_user_id(user_id)
     db = await get_db()
     try:
-        cur = await db.execute("SELECT code, name, thesis, updated_at FROM position_thesis")
+        cur = await db.execute('SELECT code, name, thesis, updated_at FROM position_thesis WHERE user_id = ?', (user_id,))
         return [dict(r) for r in await cur.fetchall()]
     finally:
         await db.close()
 
 
-async def set_thesis(code: str, thesis: str, name: str = "", facts: str = "") -> dict:
+async def set_thesis(code: str, thesis: str, name: str='', facts: str='', *, user_id: int) -> dict:
     """写入/更新买入逻辑, 并在**正文真的变了**的时候追加一条修订。
 
     只在正文变化时追加: 前端每次打开弹窗点保存都会 PUT 一次, 原文没动也记一版会把修订史灌成
     一堆同文, 漂移分析里"改过几次"就废了。facts 是调用方在保存那一刻取的事实快照(JSON 串),
     取不到就传空 —— 空要当"当时没记"处理, 不能当"事实没变"。
     """
+    validate_user_id(user_id)
     db = await get_db()
     try:
-        cur = await db.execute("SELECT thesis FROM position_thesis WHERE code = ?", (code,))
+        cur = await db.execute('SELECT thesis FROM position_thesis WHERE user_id = ? AND code = ?', (user_id, code))
         row = await cur.fetchone()
-        changed = (row is None) or ((row["thesis"] or "").strip() != (thesis or "").strip())
-        await db.execute(
-            "INSERT INTO position_thesis (code, name, thesis, updated_at) VALUES (?, ?, ?, CURRENT_TIMESTAMP) "
-            "ON CONFLICT(code) DO UPDATE SET thesis = excluded.thesis, "
-            "name = CASE WHEN excluded.name != '' THEN excluded.name ELSE position_thesis.name END, "
-            "updated_at = CURRENT_TIMESTAMP",
-            (code, name, thesis),
-        )
+        changed = row is None or (row['thesis'] or '').strip() != (thesis or '').strip()
+        await db.execute("INSERT INTO position_thesis (user_id, code, name, thesis, updated_at) VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP) ON CONFLICT(user_id, code) DO UPDATE SET thesis = excluded.thesis, name = CASE WHEN excluded.name != '' THEN excluded.name ELSE position_thesis.name END, updated_at = CURRENT_TIMESTAMP", (user_id, code, name, thesis))
         rev = 0
         if changed:
-            cur = await db.execute("SELECT COALESCE(MAX(rev), 0) FROM thesis_revision WHERE code = ?", (code,))
+            cur = await db.execute('SELECT COALESCE(MAX(rev), 0) FROM thesis_revision WHERE user_id = ? AND code = ?', (user_id, code))
             rev = int((await cur.fetchone())[0]) + 1
-            await db.execute(
-                "INSERT INTO thesis_revision (code, rev, thesis, facts) VALUES (?, ?, ?, ?)",
-                (code, rev, thesis, facts or ""),
-            )
+            await db.execute('INSERT INTO thesis_revision (user_id, code, rev, thesis, facts) VALUES (?, ?, ?, ?, ?)', (user_id, code, rev, thesis, facts or ''))
         await db.commit()
-        return {"appended": changed, "rev": rev}
+        return {'appended': changed, 'rev': rev}
     finally:
         await db.close()
 
 
-async def get_thesis_revisions(code: str) -> list[dict]:
+async def get_thesis_revisions(code: str, *, user_id: int) -> list[dict]:
     """某只的全部修订, rev 升序(第 1 版在前)。"""
+    validate_user_id(user_id)
     db = await get_db()
     try:
-        cur = await db.execute(
-            "SELECT rev, thesis, facts, created_at FROM thesis_revision WHERE code = ? ORDER BY rev", (code,))
+        cur = await db.execute('SELECT rev, thesis, facts, created_at FROM thesis_revision WHERE user_id = ? AND code = ? ORDER BY rev', (user_id, code))
         return [dict(r) for r in await cur.fetchall()]
     finally:
         await db.close()
 
 
-async def delete_thesis(code: str):
+async def delete_thesis(code: str, *, user_id: int):
     """清空逻辑。修订史一并删 —— 逻辑都不要了, 留着"改过几次"没有意义, 而且下次重记会从
     rev=N+1 接着编号, 看上去像是接着改的。"""
+    validate_user_id(user_id)
     db = await get_db()
     try:
-        await db.execute("DELETE FROM position_thesis WHERE code = ?", (code,))
-        await db.execute("DELETE FROM thesis_revision WHERE code = ?", (code,))
+        await db.execute('DELETE FROM position_thesis WHERE user_id = ? AND code = ?', (user_id, code))
+        await db.execute('DELETE FROM thesis_revision WHERE user_id = ? AND code = ?', (user_id, code))
         await db.commit()
     finally:
         await db.close()
@@ -1189,7 +1141,7 @@ async def delete_thesis(code: str):
 async def create_ask_session(title: str = "") -> int:
     db = await get_db()
     try:
-        cur = await db.execute("INSERT INTO ask_session (title) VALUES (?)", (title[:80],))
+        cur = await db.execute('INSERT INTO ask_session (title) VALUES (?)', (title[:80],))
         await db.commit()
         return cur.lastrowid
     finally:
@@ -1202,7 +1154,7 @@ async def add_ask_message(session_id: int, role: str, content: str, meta: str = 
         await db.execute(
             "INSERT INTO ask_message (session_id, role, content, meta) VALUES (?, ?, ?, ?)",
             (session_id, role, content, meta or ""))
-        await db.execute("UPDATE ask_session SET updated_at = CURRENT_TIMESTAMP WHERE id = ?", (session_id,))
+        await db.execute('UPDATE ask_session SET updated_at = CURRENT_TIMESTAMP WHERE id = ?', (session_id,))
         await db.commit()
     finally:
         await db.close()
@@ -1226,7 +1178,7 @@ async def list_ask_sessions(limit: int = 50) -> list[dict]:
 async def get_ask_session(session_id: int) -> dict | None:
     db = await get_db()
     try:
-        cur = await db.execute("SELECT * FROM ask_session WHERE id = ?", (session_id,))
+        cur = await db.execute('SELECT * FROM ask_session WHERE id = ?', (session_id,))
         s = await cur.fetchone()
         if not s:
             return None
@@ -1241,8 +1193,8 @@ async def get_ask_session(session_id: int) -> dict | None:
 async def delete_ask_session(session_id: int) -> None:
     db = await get_db()
     try:
-        await db.execute("DELETE FROM ask_message WHERE session_id = ?", (session_id,))
-        await db.execute("DELETE FROM ask_session WHERE id = ?", (session_id,))
+        await db.execute('DELETE FROM ask_message WHERE session_id = ?', (session_id,))
+        await db.execute('DELETE FROM ask_session WHERE id = ?', (session_id,))
         await db.commit()
     finally:
         await db.close()
@@ -1250,60 +1202,54 @@ async def delete_ask_session(session_id: int) -> None:
 
 # --- Unwind Plan CRUD ---
 
-async def save_unwind_plan(stock_code: str, total_budget: float, status: str = "active"):
+async def save_unwind_plan(stock_code: str, total_budget: float, status: str='active', *, user_id: int):
+    validate_user_id(user_id)
     db = await get_db()
     try:
-        await db.execute(
-            """INSERT INTO unwind_plans (stock_code, total_budget, status)
-               VALUES (?, ?, ?)
-               ON CONFLICT(stock_code) DO UPDATE SET
-                 total_budget = excluded.total_budget,
-                 status = excluded.status,
-                 updated_at = CURRENT_TIMESTAMP""",
-            (stock_code, total_budget, status),
-        )
+        await db.execute('INSERT INTO unwind_plans (user_id, stock_code, total_budget, status)\n               VALUES (?, ?, ?, ?)\n               ON CONFLICT(user_id, stock_code) DO UPDATE SET\n                 total_budget = excluded.total_budget,\n                 status = excluded.status,\n                 updated_at = CURRENT_TIMESTAMP', (user_id, stock_code, total_budget, status))
         await db.commit()
     finally:
         await db.close()
 
 
-async def get_unwind_plan(stock_code: str) -> dict | None:
+async def get_unwind_plan(stock_code: str, *, user_id: int) -> dict | None:
+    validate_user_id(user_id)
     db = await get_db()
     try:
-        cursor = await db.execute("SELECT * FROM unwind_plans WHERE stock_code = ?", (stock_code,))
+        cursor = await db.execute('SELECT * FROM unwind_plans WHERE user_id = ? AND stock_code = ?', (user_id, stock_code))
         row = await cursor.fetchone()
         return dict(row) if row else None
     finally:
         await db.close()
 
 
-async def get_all_unwind_plans() -> list[dict]:
+async def get_all_unwind_plans(*, user_id: int) -> list[dict]:
+    validate_user_id(user_id)
     db = await get_db()
     try:
-        cursor = await db.execute("SELECT * FROM unwind_plans ORDER BY stock_code")
+        cursor = await db.execute('SELECT * FROM unwind_plans WHERE user_id = ? ORDER BY stock_code', (user_id,))
         rows = await cursor.fetchall()
         return [dict(r) for r in rows]
     finally:
         await db.close()
 
 
-async def delete_unwind_plan(stock_code: str):
+async def delete_unwind_plan(stock_code: str, *, user_id: int):
+    validate_user_id(user_id)
     db = await get_db()
     try:
-        await db.execute("DELETE FROM unwind_tranches WHERE stock_code = ?", (stock_code,))
-        await db.execute("DELETE FROM unwind_plans WHERE stock_code = ?", (stock_code,))
+        await db.execute('DELETE FROM unwind_tranches WHERE user_id = ? AND stock_code = ?', (user_id, stock_code))
+        await db.execute('DELETE FROM unwind_plans WHERE user_id = ? AND stock_code = ?', (user_id, stock_code))
         await db.commit()
     finally:
         await db.close()
 
 
-async def update_unwind_used_budget(stock_code: str, used_budget: float):
+async def update_unwind_used_budget(stock_code: str, used_budget: float, *, user_id: int):
+    validate_user_id(user_id)
     db = await get_db()
     try:
-        await db.execute(
-            "UPDATE unwind_plans SET used_budget = ?, updated_at = CURRENT_TIMESTAMP WHERE stock_code = ?",
-            (used_budget, stock_code),
-        )
+        await db.execute('UPDATE unwind_plans SET used_budget = ?, updated_at = CURRENT_TIMESTAMP WHERE user_id = ? AND stock_code = ?', (used_budget, user_id, stock_code))
         await db.commit()
     finally:
         await db.close()
@@ -1311,63 +1257,53 @@ async def update_unwind_used_budget(stock_code: str, used_budget: float):
 
 # --- Tranche CRUD ---
 
-async def add_tranche(stock_code: str, idx: int, trigger_price: float, shares: int, requires_health: str = "any"):
+async def add_tranche(stock_code: str, idx: int, trigger_price: float, shares: int, requires_health: str='any', *, user_id: int):
+    validate_user_id(user_id)
     db = await get_db()
     try:
-        await db.execute(
-            """INSERT INTO unwind_tranches (stock_code, idx, trigger_price, shares, requires_health)
-               VALUES (?, ?, ?, ?, ?)""",
-            (stock_code, idx, trigger_price, shares, requires_health),
-        )
+        await db.execute('INSERT INTO unwind_tranches (user_id, stock_code, idx, trigger_price, shares, requires_health)\n               VALUES (?, ?, ?, ?, ?, ?)', (user_id, stock_code, idx, trigger_price, shares, requires_health))
         await db.commit()
     finally:
         await db.close()
 
 
-async def get_tranches(stock_code: str) -> list[dict]:
+async def get_tranches(stock_code: str, *, user_id: int) -> list[dict]:
+    validate_user_id(user_id)
     db = await get_db()
     try:
-        cursor = await db.execute(
-            "SELECT * FROM unwind_tranches WHERE stock_code = ? ORDER BY idx",
-            (stock_code,),
-        )
+        cursor = await db.execute('SELECT * FROM unwind_tranches WHERE user_id = ? AND stock_code = ? ORDER BY idx', (user_id, stock_code))
         rows = await cursor.fetchall()
         return [dict(r) for r in rows]
     finally:
         await db.close()
 
 
-async def get_tranche(tranche_id: int) -> dict | None:
+async def get_tranche(tranche_id: int, *, user_id: int) -> dict | None:
+    validate_user_id(user_id)
     db = await get_db()
     try:
-        cursor = await db.execute("SELECT * FROM unwind_tranches WHERE id = ?", (tranche_id,))
+        cursor = await db.execute('SELECT * FROM unwind_tranches WHERE user_id = ? AND id = ?', (user_id, tranche_id))
         row = await cursor.fetchone()
         return dict(row) if row else None
     finally:
         await db.close()
 
 
-async def clear_tranches(stock_code: str):
+async def clear_tranches(stock_code: str, *, user_id: int):
+    validate_user_id(user_id)
     db = await get_db()
     try:
-        await db.execute(
-            "DELETE FROM unwind_tranches WHERE stock_code = ? AND status = 'pending'",
-            (stock_code,),
-        )
+        await db.execute("DELETE FROM unwind_tranches WHERE user_id = ? AND stock_code = ? AND status = 'pending'", (user_id, stock_code))
         await db.commit()
     finally:
         await db.close()
 
 
-async def mark_tranche_executed(tranche_id: int, executed_price: float):
+async def mark_tranche_executed(tranche_id: int, executed_price: float, *, user_id: int):
+    validate_user_id(user_id)
     db = await get_db()
     try:
-        await db.execute(
-            """UPDATE unwind_tranches
-               SET status = 'executed', executed_price = ?, executed_at = CURRENT_TIMESTAMP
-               WHERE id = ?""",
-            (executed_price, tranche_id),
-        )
+        await db.execute("UPDATE unwind_tranches\n               SET status = 'executed', executed_price = ?, executed_at = CURRENT_TIMESTAMP\n               WHERE user_id = ? AND id = ?", (executed_price, user_id, tranche_id))
         await db.commit()
     finally:
         await db.close()
@@ -1397,7 +1333,7 @@ async def list_closed_external_assets(*, user_id: int) -> list[dict]:
     validate_user_id(user_id)
     db = await get_db()
     try:
-        cursor = await db.execute("SELECT * FROM external_assets WHERE user_id = ? AND COALESCE(closed, 0) = 1 ORDER BY closed_date DESC", (user_id,))
+        cursor = await db.execute('SELECT * FROM external_assets WHERE user_id = ? AND COALESCE(closed, 0) = 1 ORDER BY closed_date DESC', (user_id,))
         return [dict(r) for r in await cursor.fetchall()]
     finally:
         await db.close()
@@ -1422,7 +1358,7 @@ async def get_external_asset(asset_id: int, *, user_id: int) -> dict | None:
     validate_user_id(user_id)
     db = await get_db()
     try:
-        cursor = await db.execute("SELECT * FROM external_assets WHERE id = ? AND user_id = ?", (asset_id, user_id))
+        cursor = await db.execute('SELECT * FROM external_assets WHERE id = ? AND user_id = ?', (asset_id, user_id))
         row = await cursor.fetchone()
         return dict(row) if row else None
     finally:
@@ -1487,9 +1423,9 @@ async def delete_external_asset(asset_id: int, *, user_id: int):
     try:
         if not await (await db.execute("SELECT 1 FROM external_assets WHERE id=? AND user_id=?", (asset_id, user_id))).fetchone():
             return False
-        await db.execute("DELETE FROM dca_schedules WHERE asset_id = ?", (asset_id,))
-        await db.execute("DELETE FROM external_asset_actions WHERE asset_id = ? AND user_id = ?", (asset_id, user_id))
-        await db.execute("DELETE FROM external_assets WHERE id = ? AND user_id = ?", (asset_id, user_id))
+        await db.execute('DELETE FROM dca_schedules WHERE asset_id = ?', (asset_id,))
+        await db.execute('DELETE FROM external_asset_actions WHERE asset_id = ? AND user_id = ?', (asset_id, user_id))
+        await db.execute('DELETE FROM external_assets WHERE id = ? AND user_id = ?', (asset_id, user_id))
         await db.commit()
     finally:
         await db.close()
@@ -1500,7 +1436,7 @@ async def reassign_external_actions(source_id: int, target_id: int, *, user_id: 
     validate_user_id(user_id)
     db = await get_db()
     try:
-        await db.execute("BEGIN IMMEDIATE")
+        await db.execute('BEGIN IMMEDIATE')
         for asset_id in (source_id, target_id):
             if not await (await db.execute("SELECT 1 FROM external_assets WHERE id=? AND user_id=?", (asset_id, user_id))).fetchone():
                 raise ValueError("资产不存在或不属于当前账号")
@@ -1514,30 +1450,24 @@ async def reassign_external_actions(source_id: int, target_id: int, *, user_id: 
         await db.close()
 
 
-async def mark_tranche_sold_back(tranche_id: int, sold_price: float):
+async def mark_tranche_sold_back(tranche_id: int, sold_price: float, *, user_id: int):
     """Record the sell-leg of a tranche (做T 回收). Tranche remains 'executed'
     so it stays in the ladder; status of sell leg is tracked via sold_back_price."""
+    validate_user_id(user_id)
     db = await get_db()
     try:
-        await db.execute(
-            """UPDATE unwind_tranches
-               SET sold_back_price = ?, sold_back_at = CURRENT_TIMESTAMP
-               WHERE id = ?""",
-            (sold_price, tranche_id),
-        )
+        await db.execute('UPDATE unwind_tranches\n               SET sold_back_price = ?, sold_back_at = CURRENT_TIMESTAMP\n               WHERE user_id = ? AND id = ?', (sold_price, user_id, tranche_id))
         await db.commit()
     finally:
         await db.close()
 
 
-async def clear_tranche_sold_back(tranche_id: int):
+async def clear_tranche_sold_back(tranche_id: int, *, user_id: int):
     """Undo the sell leg."""
+    validate_user_id(user_id)
     db = await get_db()
     try:
-        await db.execute(
-            "UPDATE unwind_tranches SET sold_back_price = NULL, sold_back_at = NULL WHERE id = ?",
-            (tranche_id,),
-        )
+        await db.execute('UPDATE unwind_tranches SET sold_back_price = NULL, sold_back_at = NULL WHERE user_id = ? AND id = ?', (*(tranche_id,)[:-1], user_id, *(tranche_id,)[-1:]))
         await db.commit()
     finally:
         await db.close()
@@ -1648,7 +1578,7 @@ async def delete_position_action(action_id: int, *, user_id: int):
     validate_user_id(user_id)
     db = await get_db()
     try:
-        cursor = await db.execute("DELETE FROM position_actions WHERE id = ? AND user_id = ?", (action_id, user_id))
+        cursor = await db.execute('DELETE FROM position_actions WHERE id = ? AND user_id = ?', (action_id, user_id))
         await db.commit()
         return cursor.rowcount > 0
     finally:
@@ -1704,52 +1634,43 @@ async def get_latest_briefing(stock_code: str, *, user_id: int) -> dict | None:
 
 # --- Cashflow Monthly ---
 
-async def upsert_cashflow(month: str, income: float, fixed_cost: float, discretionary: float, notes: str = ""):
+async def upsert_cashflow(month: str, income: float, fixed_cost: float, discretionary: float, notes: str='', *, user_id: int):
+    validate_user_id(user_id)
     db = await get_db()
     try:
-        await db.execute(
-            """INSERT INTO cashflow_monthly (month, income, fixed_cost, discretionary, notes)
-               VALUES (?, ?, ?, ?, ?)
-               ON CONFLICT(month) DO UPDATE SET
-                 income = excluded.income,
-                 fixed_cost = excluded.fixed_cost,
-                 discretionary = excluded.discretionary,
-                 notes = excluded.notes,
-                 updated_at = CURRENT_TIMESTAMP""",
-            (month, float(income or 0), float(fixed_cost or 0), float(discretionary or 0), notes or ""),
-        )
+        await db.execute('INSERT INTO cashflow_monthly (user_id, month, income, fixed_cost, discretionary, notes)\n               VALUES (?, ?, ?, ?, ?, ?)\n               ON CONFLICT(user_id, month) DO UPDATE SET\n                 income = excluded.income,\n                 fixed_cost = excluded.fixed_cost,\n                 discretionary = excluded.discretionary,\n                 notes = excluded.notes,\n                 updated_at = CURRENT_TIMESTAMP', (user_id, month, float(income or 0), float(fixed_cost or 0), float(discretionary or 0), notes or ''))
         await db.commit()
     finally:
         await db.close()
 
 
-async def get_cashflow(month: str) -> dict | None:
+async def get_cashflow(month: str, *, user_id: int) -> dict | None:
+    validate_user_id(user_id)
     db = await get_db()
     try:
-        cursor = await db.execute("SELECT * FROM cashflow_monthly WHERE month = ?", (month,))
+        cursor = await db.execute('SELECT * FROM cashflow_monthly WHERE user_id = ? AND month = ?', (user_id, month))
         row = await cursor.fetchone()
         return dict(row) if row else None
     finally:
         await db.close()
 
 
-async def list_cashflow(months: int = 12) -> list[dict]:
+async def list_cashflow(months: int=12, *, user_id: int) -> list[dict]:
+    validate_user_id(user_id)
     db = await get_db()
     try:
-        cursor = await db.execute(
-            "SELECT * FROM cashflow_monthly ORDER BY month DESC LIMIT ?",
-            (max(1, int(months)),),
-        )
+        cursor = await db.execute('SELECT * FROM cashflow_monthly WHERE user_id = ? ORDER BY month DESC LIMIT ?', (user_id, max(1, int(months))))
         rows = await cursor.fetchall()
         return [dict(r) for r in rows]
     finally:
         await db.close()
 
 
-async def delete_cashflow(month: str):
+async def delete_cashflow(month: str, *, user_id: int):
+    validate_user_id(user_id)
     db = await get_db()
     try:
-        await db.execute("DELETE FROM cashflow_monthly WHERE month = ?", (month,))
+        await db.execute('DELETE FROM cashflow_monthly WHERE user_id = ? AND month = ?', (user_id, month))
         await db.commit()
     finally:
         await db.close()
@@ -1824,7 +1745,7 @@ async def delete_external_action(action_id: int, *, user_id: int):
     validate_user_id(user_id)
     db = await get_db()
     try:
-        cursor = await db.execute("DELETE FROM external_asset_actions WHERE id = ? AND user_id = ?", (action_id, user_id))
+        cursor = await db.execute('DELETE FROM external_asset_actions WHERE id = ? AND user_id = ?', (action_id, user_id))
         await db.commit()
         return cursor.rowcount > 0
     finally:
@@ -1838,7 +1759,7 @@ async def list_dca_schedules(asset_id: int | None = None, *, user_id: int) -> li
     db = await get_db()
     try:
         if asset_id is None:
-            cursor = await db.execute("SELECT * FROM dca_schedules WHERE asset_id IN (SELECT id FROM external_assets WHERE user_id = ?) ORDER BY id", (user_id,))
+            cursor = await db.execute('SELECT * FROM dca_schedules WHERE asset_id IN (SELECT id FROM external_assets WHERE user_id = ?) ORDER BY id', (user_id,))
         else:
             cursor = await db.execute(
                 "SELECT * FROM dca_schedules WHERE asset_id = ? AND asset_id IN (SELECT id FROM external_assets WHERE user_id = ?) ORDER BY id",
@@ -1854,7 +1775,7 @@ async def get_dca_schedule(dca_id: int, *, user_id: int) -> dict | None:
     validate_user_id(user_id)
     db = await get_db()
     try:
-        cursor = await db.execute("SELECT * FROM dca_schedules WHERE id = ? AND asset_id IN (SELECT id FROM external_assets WHERE user_id = ?)", (dca_id, user_id))
+        cursor = await db.execute('SELECT * FROM dca_schedules WHERE id = ? AND asset_id IN (SELECT id FROM external_assets WHERE user_id = ?)', (dca_id, user_id))
         row = await cursor.fetchone()
         return dict(row) if row else None
     finally:
@@ -1909,7 +1830,7 @@ async def delete_dca_schedule(dca_id: int, *, user_id: int):
     validate_user_id(user_id)
     db = await get_db()
     try:
-        await db.execute("DELETE FROM dca_schedules WHERE id = ? AND asset_id IN (SELECT id FROM external_assets WHERE user_id = ?)", (dca_id, user_id))
+        await db.execute('DELETE FROM dca_schedules WHERE id = ? AND asset_id IN (SELECT id FROM external_assets WHERE user_id = ?)', (dca_id, user_id))
         await db.commit()
     finally:
         await db.close()
@@ -1932,58 +1853,65 @@ async def list_due_dca_schedules(today_str: str, *, user_id: int) -> list[dict]:
 
 # --- Brokers ---
 
-async def list_brokers() -> list[dict]:
+async def list_brokers(*, user_id: int) -> list[dict]:
+    validate_user_id(user_id)
     db = await get_db()
     try:
-        cur = await db.execute("SELECT * FROM brokers ORDER BY is_default DESC, id ASC")
+        cur = await db.execute('SELECT * FROM brokers WHERE user_id = ? ORDER BY is_default DESC, id ASC', (user_id,))
         return [dict(r) for r in await cur.fetchall()]
     finally:
         await db.close()
 
 
-async def get_default_broker() -> dict | None:
+async def get_default_broker(*, user_id: int) -> dict | None:
+    validate_user_id(user_id)
     db = await get_db()
     try:
-        cur = await db.execute("SELECT * FROM brokers WHERE is_default=1 LIMIT 1")
+        cur = await db.execute('SELECT * FROM brokers WHERE user_id = ? AND is_default=1 LIMIT 1', (user_id,))
         r = await cur.fetchone()
         if r is None:
-            cur = await db.execute("SELECT * FROM brokers ORDER BY id ASC LIMIT 1")
+            cur = await db.execute('SELECT * FROM brokers WHERE user_id = ? ORDER BY id ASC LIMIT 1', (user_id,))
             r = await cur.fetchone()
         return dict(r) if r else None
     finally:
         await db.close()
 
 
-async def add_broker(name, stock_rate, stock_min, etf_rate, etf_min) -> int:
+async def add_broker(name, stock_rate, stock_min, etf_rate, etf_min, *, user_id: int) -> int:
+    validate_user_id(user_id)
     db = await get_db()
     try:
-        cur = await db.execute(
-            "INSERT INTO brokers (name, stock_rate, stock_min, etf_rate, etf_min, is_default) VALUES (?,?,?,?,?,0)",
-            (name, stock_rate, stock_min, etf_rate, etf_min))
+        cur = await db.execute('INSERT INTO brokers (user_id, name, stock_rate, stock_min, etf_rate, etf_min, is_default) VALUES (?, ?,?,?,?,?,0)', (user_id, name, stock_rate, stock_min, etf_rate, etf_min))
         await db.commit()
         return cur.lastrowid
     finally:
         await db.close()
 
 
-async def update_broker(broker_id: int, **kwargs):
+async def update_broker(broker_id: int, *, user_id: int, **kwargs):
+    validate_user_id(user_id)
+    if set(kwargs) - {'name', 'stock_rate', 'stock_min', 'etf_rate', 'etf_min', 'is_default'}:
+        raise ValueError('不允许更新该券商字段')
     if not kwargs:
         return
     db = await get_db()
     try:
-        if kwargs.get("is_default"):
-            await db.execute("UPDATE brokers SET is_default=0")
-        cols = ", ".join(f"{k}=?" for k in kwargs)
-        await db.execute(f"UPDATE brokers SET {cols} WHERE id=?", (*kwargs.values(), broker_id))
+        if not await (await db.execute('SELECT 1 FROM brokers WHERE id=? AND user_id=?', (broker_id, user_id))).fetchone():
+            return
+        if kwargs.get('is_default'):
+            await db.execute('UPDATE brokers SET is_default=0 WHERE user_id = ?', (user_id,))
+        cols = ', '.join((f'{k}=?' for k in kwargs))
+        await db.execute(f'UPDATE brokers SET {cols} WHERE user_id = ? AND id=?', (*kwargs.values(), user_id, broker_id))
         await db.commit()
     finally:
         await db.close()
 
 
-async def delete_broker(broker_id: int):
+async def delete_broker(broker_id: int, *, user_id: int):
+    validate_user_id(user_id)
     db = await get_db()
     try:
-        await db.execute("DELETE FROM brokers WHERE id=? AND is_default=0", (broker_id,))
+        await db.execute('DELETE FROM brokers WHERE user_id = ? AND id=? AND is_default=0', (user_id, broker_id))
         await db.commit()
     finally:
         await db.close()
@@ -2083,65 +2011,53 @@ async def list_sector_share_dates(limit: int = 20) -> list[str]:
 
 # ---- 自选观察池 ----
 
-async def add_watchlist(code: str, name: str, price: float | None):
+async def add_watchlist(code: str, name: str, price: float | None, *, user_id: int):
+    validate_user_id(user_id)
     import datetime
     db = await get_db()
     try:
-        await db.execute(
-            "INSERT OR REPLACE INTO watchlist (stock_code, stock_name, added_at, added_price) VALUES (?, ?, ?, ?)",
-            (code, name, datetime.date.today().isoformat(), price))
-        # 默认落进「自选」组。它是真实分组, 所以这一步会真写一行 —— 不写的话新加的票
-        # 一个组都不在, 只能在「全部」里看到。
-        cur = await db.execute(
-            "SELECT COALESCE(MAX(group_order),0)+1 FROM watchlist_group WHERE grp=?",
-            (DEFAULT_WATCH_GROUP,))
+        await db.execute('INSERT OR REPLACE INTO watchlist (user_id, stock_code, stock_name, added_at, added_price) VALUES (?, ?, ?, ?, ?)', (user_id, code, name, datetime.date.today().isoformat(), price))
+        cur = await db.execute('SELECT COALESCE(MAX(group_order),0)+1 FROM watchlist_group WHERE user_id = ? AND grp=?', (user_id, DEFAULT_WATCH_GROUP))
         nxt = (await cur.fetchone())[0] or 0
-        await db.execute(
-            "INSERT OR IGNORE INTO watchlist_group (stock_code, grp, group_order) VALUES (?,?,?)",
-            (code, DEFAULT_WATCH_GROUP, nxt))
+        await db.execute('INSERT OR IGNORE INTO watchlist_group (user_id, stock_code, grp, group_order) VALUES (?, ?,?,?)', (user_id, code, DEFAULT_WATCH_GROUP, nxt))
         await db.commit()
     finally:
         await db.close()
 
 
-async def remove_watchlist(code: str):
+async def remove_watchlist(code: str, *, user_id: int):
+    validate_user_id(user_id)
     db = await get_db()
     try:
-        await db.execute("DELETE FROM watchlist WHERE stock_code = ?", (code,))
-        # 分组成员一起删: 留着就成了孤儿行, 以后这只票重新加回自选会连着旧分组一起复活
-        await db.execute("DELETE FROM watchlist_group WHERE stock_code = ?", (code,))
+        await db.execute('DELETE FROM watchlist WHERE user_id = ? AND stock_code = ?', (user_id, code))
+        await db.execute('DELETE FROM watchlist_group WHERE user_id = ? AND stock_code = ?', (user_id, code))
         await db.commit()
     finally:
         await db.close()
 
 
-async def list_watchlist() -> list[dict]:
+async def list_watchlist(*, user_id: int) -> list[dict]:
     """自选列表。按全局位次排(位次相同则退回加入时间倒序, 与改造前一致)。
     分组不参与全局排序 —— 一只票可以在好几个组里, 「全部」视图只有一种顺序。
     groups=所属分组名(空列表=还没归组, 即默认组「自选」);
     group_orders={分组名: 组内位次}, 前端选中某个组时按它排。"""
+    validate_user_id(user_id)
     db = await get_db()
     try:
-        cur = await db.execute(
-            "SELECT stock_code, stock_name, added_at, added_price, COALESCE(sort_order,0) "
-            "FROM watchlist ORDER BY COALESCE(sort_order,0), created_at DESC")
+        cur = await db.execute('SELECT stock_code, stock_name, added_at, added_price, COALESCE(sort_order,0) FROM watchlist WHERE user_id = ? ORDER BY COALESCE(sort_order,0), created_at DESC', (user_id,))
         rows = await cur.fetchall()
-        cur = await db.execute(
-            "SELECT stock_code, grp, COALESCE(group_order,0) FROM watchlist_group ORDER BY grp")
+        cur = await db.execute('SELECT stock_code, grp, COALESCE(group_order,0) FROM watchlist_group WHERE user_id = ? ORDER BY grp', (user_id,))
         gm: dict[str, list[str]] = {}
         om: dict[str, dict[str, float]] = {}
         for code, grp, order in await cur.fetchall():
             gm.setdefault(code, []).append(grp)
             om.setdefault(code, {})[grp] = order or 0
-        return [{"code": r[0], "name": r[1], "added_at": r[2], "added_price": r[3],
-                 "sort_order": r[4] or 0,
-                 "groups": gm.get(r[0], []), "group_orders": om.get(r[0], {})}
-                for r in rows]
+        return [{'code': r[0], 'name': r[1], 'added_at': r[2], 'added_price': r[3], 'sort_order': r[4] or 0, 'groups': gm.get(r[0], []), 'group_orders': om.get(r[0], {})} for r in rows]
     finally:
         await db.close()
 
 
-async def set_watchlist_groups(code: str, groups: list[str]) -> list[str]:
+async def set_watchlist_groups(code: str, groups: list[str], *, user_id: int) -> list[str]:
     """整套覆盖这只票的分组(前端本地勾完提交全集, 幂等)。返回落库后的分组表。
 
     已经在的组保留原位次 —— 重写位次的话勾一个新组会把这只票在老组里挪到末尾。
@@ -2149,35 +2065,35 @@ async def set_watchlist_groups(code: str, groups: list[str]) -> list[str]:
     不该让这只票凭空跳位置。
     传空列表 = 退回默认组「自选」(而不是一个组都不在: 那样这只票只能在「全部」里看到)。
     """
+    validate_user_id(user_id)
     want = []
     for g in groups or []:
-        g = (str(g) or "").strip()
+        g = (str(g) or '').strip()
         if g and g not in want:
             want.append(g)
     if not want:
         want = [DEFAULT_WATCH_GROUP]
     db = await get_db()
     try:
-        cur = await db.execute("SELECT grp FROM watchlist_group WHERE stock_code=?", (code,))
+        if not await (await db.execute('SELECT 1 FROM watchlist WHERE user_id=? AND stock_code=?', (user_id, code))).fetchone():
+            return []
+        cur = await db.execute('SELECT grp FROM watchlist_group WHERE user_id = ? AND stock_code=?', (user_id, code))
         have = {r[0] for r in await cur.fetchall()}
         for g in have - set(want):
-            await db.execute("DELETE FROM watchlist_group WHERE stock_code=? AND grp=?", (code, g))
+            await db.execute('DELETE FROM watchlist_group WHERE user_id = ? AND stock_code=? AND grp=?', (user_id, code, g))
         for g in want:
             if g in have:
                 continue
-            cur = await db.execute(
-                "SELECT COALESCE(MAX(group_order),0)+1 FROM watchlist_group WHERE grp=?", (g,))
+            cur = await db.execute('SELECT COALESCE(MAX(group_order),0)+1 FROM watchlist_group WHERE user_id = ? AND grp=?', (user_id, g))
             nxt = (await cur.fetchone())[0] or 0
-            await db.execute(
-                "INSERT OR IGNORE INTO watchlist_group (stock_code, grp, group_order) "
-                "VALUES (?,?,?)", (code, g, nxt))
+            await db.execute('INSERT OR IGNORE INTO watchlist_group (user_id, stock_code, grp, group_order) VALUES (?, ?,?,?)', (user_id, code, g, nxt))
         await db.commit()
         return want
     finally:
         await db.close()
 
 
-async def reorder_watchlist(codes: list[str], scope: str = "global", group: str | None = None) -> None:
+async def reorder_watchlist(codes: list[str], scope: str='global', group: str | None=None, *, user_id: int) -> None:
     """按给定顺序覆盖写位次。
 
     scope='global': 写 sort_order(「全部」视图拖动), 不碰分组;
@@ -2185,19 +2101,18 @@ async def reorder_watchlist(codes: list[str], scope: str = "global", group: str 
                     只动这一个组的成员关系, 票在别的组里待着不受影响。
     两套位次独立, 所以在组内调顺序不会打乱「全部」视图, 反之亦然。
     """
+    validate_user_id(user_id)
     db = await get_db()
     try:
         for i, c in enumerate(codes or []):
-            if scope == "group":
-                if not (group or ""):
-                    continue               # 组名为空是脏入参, 不建这种行(默认组叫「自选」)
-                await db.execute(
-                    "INSERT INTO watchlist_group (stock_code, grp, group_order) VALUES (?,?,?) "
-                    "ON CONFLICT(stock_code, grp) DO UPDATE SET group_order=excluded.group_order",
-                    (c, group, float(i)))
+            if not await (await db.execute('SELECT 1 FROM watchlist WHERE user_id=? AND stock_code=?', (user_id, c))).fetchone():
+                continue
+            if scope == 'group':
+                if not (group or ''):
+                    continue
+                await db.execute('INSERT INTO watchlist_group (user_id, stock_code, grp, group_order) VALUES (?, ?,?,?) ON CONFLICT(user_id, stock_code, grp) DO UPDATE SET group_order=excluded.group_order', (user_id, c, group, float(i)))
             else:
-                await db.execute("UPDATE watchlist SET sort_order=? WHERE stock_code=?",
-                                 (float(i), c))
+                await db.execute('UPDATE watchlist SET sort_order=? WHERE user_id = ? AND stock_code=?', (*(float(i), c)[:-1], user_id, *(float(i), c)[-1:]))
         await db.commit()
     finally:
         await db.close()
@@ -2226,9 +2141,9 @@ async def load_symbol_dict() -> tuple[list[tuple], str | None]:
     """→ ([(code, name, is_etf)], 最新更新时间)。空表返回 ([], None)。"""
     db = await get_db()
     try:
-        cur = await db.execute("SELECT code, name, COALESCE(is_etf,0) FROM symbol_dict")
+        cur = await db.execute('SELECT code, name, COALESCE(is_etf,0) FROM symbol_dict')
         rows = [(r[0], r[1], int(r[2])) for r in await cur.fetchall()]
-        cur = await db.execute("SELECT MAX(updated_at) FROM symbol_dict")
+        cur = await db.execute('SELECT MAX(updated_at) FROM symbol_dict')
         ts = (await cur.fetchone())[0]
         return rows, ts
     finally:
@@ -2432,7 +2347,7 @@ async def pool_codes_missing_klines() -> tuple[list[str], str]:
     """
     db = await get_db()
     try:
-        cur = await db.execute("SELECT MIN(snap_date) FROM limit_up_pool")
+        cur = await db.execute('SELECT MIN(snap_date) FROM limit_up_pool')
         since = (await cur.fetchone())[0]
         if not since:
             return [], ""
@@ -2459,5 +2374,28 @@ async def limit_up_pool_coverage() -> dict:
         by_src = {r[0]: r[1] for r in await cur.fetchall()}
         return {"days": days or 0, "rows": rows or 0, "first": lo, "last": hi,
                 "days_by_source": by_src}
+    finally:
+        await db.close()
+
+
+PRIVATE_SETTING_KEYS = {'max_daily_loss', 'fee_schedules', 'cashflow_savings_rate_target'}
+
+
+async def get_user_setting(key: str, *, user_id: int) -> str | None:
+    validate_user_id(user_id)
+    db = await get_db()
+    try:
+        row = await (await db.execute('SELECT value FROM user_settings WHERE user_id=? AND key=?', (user_id, key))).fetchone()
+        return row['value'] if row else None
+    finally:
+        await db.close()
+
+
+async def set_user_setting(key: str, value: str, *, user_id: int):
+    validate_user_id(user_id)
+    db = await get_db()
+    try:
+        await db.execute('INSERT INTO user_settings(user_id,key,value) VALUES (?,?,?) ON CONFLICT(user_id,key) DO UPDATE SET value=excluded.value', (user_id, key, value))
+        await db.commit()
     finally:
         await db.close()

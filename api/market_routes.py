@@ -632,7 +632,7 @@ async def watchlist_get(lite: bool = False):
     """
     if lite:
         from database import list_watchlist
-        rows = await list_watchlist()
+        rows = await list_watchlist(user_id=require_user_id())
         # by_code 的值是分组名的列表(一票多组); 空列表 = 还没归组, 即默认组「自选」
         return {"codes": [r["code"] for r in rows],
                 "by_code": {r["code"]: list(r.get("groups") or []) for r in rows},
@@ -655,14 +655,14 @@ async def watchlist_add(stock_code: str):
     from services.market_data import get_realtime_quotes
     code = _wl_code(stock_code)
     q = (await get_realtime_quotes([code])).get(code) or {}
-    await add_watchlist(code, q.get("stock_name") or code, q.get("price"))
+    await add_watchlist(code, q.get("stock_name") or code, q.get("price"), user_id=require_user_id())
     return {"ok": True, "code": code, "name": q.get("stock_name"), "added_price": q.get("price")}
 
 
 @router.delete("/watchlist/{stock_code}")
 async def watchlist_del(stock_code: str):
     from database import remove_watchlist
-    await remove_watchlist(_wl_code(stock_code))
+    await remove_watchlist(_wl_code(stock_code), user_id=require_user_id())
     return {"ok": True}
 
 
@@ -693,7 +693,7 @@ async def watchlist_set_groups(stock_code: str, body: WatchGroupsReq):
         if g and g not in names:
             names.append(g)
     saved = await set_watchlist_groups(_wl_code(stock_code),
-                                       names[:_MAX_GROUPS_PER_STOCK])
+                                       names[:_MAX_GROUPS_PER_STOCK], user_id=require_user_id())
     return {"ok": True, "groups": saved}
 
 
@@ -708,7 +708,7 @@ async def watchlist_reorder(body: WatchReorderReq):
     from database import reorder_watchlist
     scope = "group" if body.scope == "group" else "global"
     await reorder_watchlist([_wl_code(str(c)) for c in (body.codes or [])][:500],
-                            scope=scope, group=(body.group or "").strip()[:20])
+                            scope=scope, group=(body.group or "").strip()[:20], user_id=require_user_id())
     return {"ok": True}
 
 
