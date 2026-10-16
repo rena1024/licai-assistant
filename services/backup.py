@@ -78,6 +78,8 @@ def create_backup(*,kind='manual',now=None,maintenance=False):
             source=database_path(config.db_path)
             with closing(sqlite3.connect(source.as_uri()+'?mode=ro',uri=True)) as reader,closing(sqlite3.connect(target)) as writer:
                 reader.backup(writer)
+                # 恢复点是独立主文件，不把WAL／SHM及其后续变化纳入摘要。
+                writer.execute("PRAGMA journal_mode=DELETE")
             target.chmod(0o600)
             with closing(sqlite3.connect(target)) as snapshot:
                 versions=_schema(snapshot)
@@ -87,6 +89,10 @@ def create_backup(*,kind='manual',now=None,maintenance=False):
                         for filename in _MEDIA.findall(value or ''):
                             if Path(filename).name!=filename:raise BackupError('invalid_media')
                             references.add(f'media/{owner}/{filename}')
+            # SQLite可留下已无数据用途的SHM；所有快照连接关闭后再清理。
+            for suffix in ("-wal","-shm"):
+                side=Path(str(target)+suffix)
+                if side.exists():side.unlink()
             for name in sorted(references):
                 file=_safe_file(paths.root/name,paths.root)
                 if not file.is_file():raise BackupError('missing_media')
