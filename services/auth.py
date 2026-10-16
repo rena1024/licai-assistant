@@ -57,7 +57,7 @@ async def _verify(password: str, encoded: str) -> bool:
     return await asyncio.to_thread(accounts._password_hash.verify, password, encoded)
 
 
-async def login(*, username: str, password: str, now: int | None = None) -> Session:
+async def login(*, username: str, password: str, replace_token: str = "", now: int | None = None) -> Session:
     try:
         name = accounts._username(username)
     except accounts.AccountError:
@@ -71,6 +71,15 @@ async def login(*, username: str, password: str, now: int | None = None) -> Sess
         sid = secrets.token_hex(16)
         timestamp = accounts._now(now)
         expires = timestamp + SESSION_TTL
+        # 新账号校验成功后才替换当前浏览器的旧会话；失败或取消不影响原登录。
+        if replace_token:
+            previous = await (await db.execute(
+                "SELECT user_id FROM sessions WHERE token_hash=? AND revoked_at IS NULL",
+                (accounts._token_hash(replace_token),),
+            )).fetchone()
+            if previous:
+                await db.execute("UPDATE sessions SET revoked_at=? WHERE token_hash=?", (timestamp, accounts._token_hash(replace_token)))
+                await audit.record(db, action="logout", outcome="success", created_at=timestamp, actor_id=previous["user_id"])
         await db.execute(
             "INSERT INTO sessions (session_id, token_hash, user_id, auth_version, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?)",
             (sid, accounts._token_hash(token), row["id"], row["auth_version"], timestamp, expires),

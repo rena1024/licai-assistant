@@ -106,7 +106,8 @@ def _auth_error(exc):
 async def login(request: Request, response: Response):
     data = await _read_secret_body(request, LoginIn)
     try:
-        session = await auth.login(username=data.username, password=data.password.get_secret_value())
+        session = await auth.login(username=data.username, password=data.password.get_secret_value(),
+                                   replace_token=request.cookies.get(auth.COOKIE_NAME, ""))
     except accounts.AccountError as exc:
         raise _auth_error(exc) from None
     response.set_cookie(auth.COOKIE_NAME, session.token, max_age=auth.SESSION_TTL, httponly=True,

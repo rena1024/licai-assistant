@@ -9,12 +9,14 @@ function reloadAccount() {
   window.location.replace(window.location.pathname)
 }
 
-function AccountForm({ mode, onSuccess, onCancel, outerError, mustChange }) {
+export function AccountForm({ mode, onSuccess, onCancel, outerError, mustChange, currentUsername }) {
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
+  const [password, setPassword] = useState('')
+  const switching = mode === 'switch'
   const change = mode === 'password'
   const bootstrap = mode === 'bootstrap'
-  const title = change ? '修改密码' : bootstrap ? '创建管理员' : '登录理财助手'
+  const title = change ? '修改密码' : bootstrap ? '创建管理员' : switching ? '切换账号' : '登录理财助手'
   const submit = async (event) => {
     event.preventDefault()
     const form = event.currentTarget
@@ -38,31 +40,39 @@ function AccountForm({ mode, onSuccess, onCancel, outerError, mustChange }) {
     <div className="min-h-screen flex items-center justify-center bg-bg px-4 py-8">
       <section className="w-full max-w-sm rounded-xl border border-border bg-surface p-6">
         <h1 className="text-xl font-semibold text-text-bright mb-3">{title}</h1>
-        <p className="text-sm text-text-dim mb-5">{change ? '临时密码首次使用或重置后须修改；修改后请重新登录。' : bootstrap ? '请使用部署机器上生成的一次性初始化凭据。' : '使用管理员创建的账号登录。会话固定保留 30 天。'}</p>
+        <p className="text-sm text-text-dim mb-5">{change ? '修改后所有设备的旧会话失效，请重新登录。' : bootstrap ? '请使用部署机器上生成的一次性初始化凭据。' : switching ? `当前账号 ${currentUsername} 仍保持登录；新账号登录成功后才切换。` : '使用管理员创建的账号登录。会话固定保留 30 天。'}</p>
         <form onSubmit={submit} className="space-y-4">
           {bootstrap && <label className="block text-sm text-text">初始化凭据<input name="token" type="password" autoComplete="off" required maxLength={128} className={inputClass} /></label>}
           {!change && <label className="block text-sm text-text">账号<input name="username" autoComplete="username" required maxLength={64} className={inputClass} /></label>}
-          <label className="block text-sm text-text">{change ? '当前密码' : '密码'}<input name={change ? 'current_password' : 'password'} type="password" autoComplete={bootstrap ? 'new-password' : 'current-password'} required minLength={bootstrap ? 12 : undefined} maxLength={128} className={inputClass} /></label>
+          <label className="block text-sm text-text">{change ? '当前密码' : '密码'}<input name={change ? 'current_password' : 'password'} type="password" autoComplete={bootstrap ? 'new-password' : 'current-password'} required minLength={4} onChange={change ? undefined : event => setPassword(event.target.value)} aria-describedby="password-policy" maxLength={128} className={inputClass} /></label>
           {change && <>
-            <label className="block text-sm text-text">新密码<input name="new_password" type="password" autoComplete="new-password" required minLength={12} maxLength={128} className={inputClass} /></label>
-            <label className="block text-sm text-text">确认新密码<input name="confirm_password" type="password" autoComplete="new-password" required minLength={12} maxLength={128} className={inputClass} /></label>
+            <label className="block text-sm text-text">新密码<input name="new_password" onChange={event => setPassword(event.target.value)} aria-describedby="password-policy" type="password" autoComplete="new-password" required minLength={4} maxLength={128} className={inputClass} /></label>
+            <label className="block text-sm text-text">确认新密码<input name="confirm_password" type="password" autoComplete="new-password" required minLength={4} maxLength={128} className={inputClass} /></label>
           </>}
-          {(bootstrap || change) && <p className="text-xs text-text-dim">密码长度为 12～128 个字符。</p>}
+          <PasswordHint password={password} />
           {(error || outerError) && <p role="alert" className="text-sm text-text">{error || outerError}</p>}
           <button disabled={busy} className="w-full rounded-lg bg-accent text-bg px-4 py-2 disabled:opacity-50">{busy ? '处理中…' : title}</button>
-          {onCancel && <button type="button" disabled={busy} onClick={onCancel} className="w-full text-sm text-text-dim">{mustChange ? '退出登录' : '返回'}</button>}
+          {onCancel && <button type="button" disabled={busy} onClick={onCancel} className="w-full text-sm text-text-dim">{switching ? '取消切换' : mustChange ? '退出登录' : '返回'}</button>}
         </form>
       </section>
     </div>
   )
 }
 
+export function PasswordHint({ password }) {
+  return <div id="password-policy" className="text-xs text-text-dim">
+    <p>密码长度为 4～128 个字符。</p>
+    <p role="status" aria-live="polite" className="text-accent">{password.length > 0 && password.length < 8 ? '密码强度太弱，建议至少使用 8 个字符；仍可继续。' : ''}</p>
+  </div>
+}
+
 export default function AccountGate({ children }) {
   const [state, setState] = useState({ mode: 'loading' })
+  const [switching, setSwitching] = useState(false)
   const [error, setError] = useState('')
   useEffect(() => {
     let active = true
-    const ended = () => { if (active) setState({ mode: 'login' }) }
+    const ended = () => { if (active) { setSwitching(false); setState({ mode: 'login' }) } }
     const changed = (event) => {
       if (event.key === 'licai:account-changed') { invalidateSession(); window.location.replace(window.location.pathname) }
     }
@@ -98,12 +108,18 @@ export default function AccountGate({ children }) {
   if (state.mode === 'error') return <p role="alert" className="p-6 text-text">{error}</p>
   if (state.mode !== 'ready') return <AccountForm key={state.mode} mode={state.mode} outerError={error} mustChange={state.account?.must_change_password} onSuccess={reloadAccount} onCancel={state.mode === 'password' ? (state.account?.must_change_password ? logout : reloadAccount) : undefined} />
   return <>
+    <div className={switching ? 'hidden' : 'h-full flex flex-col'} inert={switching}>
     <div className="flex flex-wrap items-center justify-end gap-3 border-b border-border bg-surface px-4 py-1 text-xs text-text-dim">
       <span>当前账号：{state.account.username}</span>
       <button onClick={() => setState({ ...state, mode: 'password' })}>修改密码</button>
-      <button onClick={logout}>退出 / 切换账号</button>
+      <button onClick={() => { setError(''); setSwitching(true) }}>切换账号</button>
+      <button onClick={logout}>退出登录</button>
       {error && <span role="alert">{error}</span>}
     </div>
     <div className="flex-1 min-h-0">{children}</div>
+    </div>
+    {switching && <div className="fixed inset-0 z-[100] overflow-y-auto bg-bg">
+      <AccountForm mode="switch" currentUsername={state.account.username} onSuccess={reloadAccount} onCancel={() => setSwitching(false)} />
+    </div>}
   </>
 }

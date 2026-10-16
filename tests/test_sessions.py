@@ -163,3 +163,42 @@ def test_websocket_requires_session_and_same_origin(session_db):
         with c.websocket_connect('/ws', headers={'Origin': 'http://testserver'}) as ws:
             ws.send_json({'type': 'ping'})
             assert ws.receive_json() == {'type': 'pong'}
+
+
+def test_four_character_password_supported_through_account_lifecycle(session_db):
+    from services import accounts, auth
+
+    async def exercise():
+        for invalid in ('', '123', 'x' * 129):
+            with pytest.raises(accounts.AccountError):
+                await accounts.create_user(actor_id=session_db[1].id, username='short-user', password=invalid, now=NOW)
+        user = await accounts.create_user(actor_id=session_db[1].id, username='short-user', password='1234', now=NOW)
+        session = await auth.login(username=user.username, password='1234', now=NOW)
+        await auth.change_password(session.token, current_password='1234', new_password='5678', now=NOW + 1)
+        assert not (await auth.login(username=user.username, password='5678', now=NOW + 2)).account.must_change_password
+        await accounts.reset_user_password(actor_id=session_db[1].id, user_id=user.id, password='4321', now=NOW + 3)
+        assert (await auth.login(username=user.username, password='4321', now=NOW + 4)).account.must_change_password
+        await accounts.recover_admin_password(password='9876', now=NOW + 5)
+        assert (await auth.login(username='admin', password='9876', now=NOW + 6)).account.must_change_password
+
+    asyncio.run(exercise())
+
+
+def test_switch_only_replaces_current_session_after_success(session_db):
+    from run import app
+    from services import auth
+
+    with TestClient(app) as c:
+        c.post('/api/auth/login', json={'username': 'admin', 'password': PASSWORD})
+        previous = c.cookies[auth.COOKIE_NAME]
+        other_device = asyncio.run(auth.login(username='admin', password=PASSWORD))
+        failed = c.post('/api/auth/login', json={'username': 'alice', 'password': 'incorrect'})
+        assert failed.status_code == 401
+        assert c.get('/api/auth/me').json()['account']['username'] == 'admin'
+        assert c.cookies[auth.COOKIE_NAME] == previous
+        success = c.post('/api/auth/login', json={'username': 'alice', 'password': PASSWORD})
+        assert success.status_code == 200
+        assert c.get('/api/auth/me').json()['account']['username'] == 'alice'
+        with pytest.raises(auth.AuthError):
+            asyncio.run(auth.authenticate(previous))
+        assert asyncio.run(auth.authenticate(other_device.token)).account.username == 'admin'

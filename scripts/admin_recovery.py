@@ -68,11 +68,13 @@ def main(argv: list[str] | None = None) -> int:
         if not sys.stdin.isatty() or not sys.stderr.isatty():
             print("密码恢复需要交互式终端，不接受管道或重定向输入。", file=sys.stderr)
             return 2
-        password = getpass.getpass("新的管理员临时密码（12～128 个字符，输入不回显）：")
+        password = getpass.getpass("新的管理员临时密码（4～128 个字符，输入不回显）：")
         confirmation = getpass.getpass("再次输入临时密码：")
         if password != confirmation:
             print("两次输入不一致，未修改密码。", file=sys.stderr)
             return 2
+        if 4 <= len(password) < 8:
+            print("提示：密码强度太弱，建议至少使用 8 个字符。", file=sys.stderr)
         asyncio.run(_recover(password))
         print("管理员临时密码已更新，所有旧会话已撤销；重新登录后须改密。")
         return 0

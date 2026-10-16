@@ -178,7 +178,7 @@ def test_existing_unowned_business_data_blocks_bootstrap(account_db):
     assert not rows(account_db, "SELECT id FROM users")
 
 
-@pytest.mark.parametrize("password", ["short", "x" * 129])
+@pytest.mark.parametrize("password", ["123", "x" * 129])
 def test_invalid_password_does_not_consume_bootstrap_token(account_db, password):
     from services import accounts
 
@@ -428,3 +428,14 @@ def test_private_configuration_still_blocks_bootstrap_with_system_proxy(account_
         asyncio.run(accounts.issue_bootstrap_token(now=NOW))
     assert rows(account_db, "SELECT * FROM app_config ORDER BY key") == original
     assert not rows(account_db, "SELECT id FROM users")
+
+
+def test_bootstrap_accepts_four_character_password(account_db):
+    from services import accounts, auth
+
+    async def exercise():
+        path = await accounts.issue_bootstrap_token(now=NOW)
+        await accounts.bootstrap_admin(token=path.read_text().strip(), username='Admin', password='1234', now=NOW)
+        assert (await auth.login(username='admin', password='1234', now=NOW)).account.role == 'admin'
+
+    asyncio.run(exercise())

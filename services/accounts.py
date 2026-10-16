@@ -35,7 +35,7 @@ _ERRORS = {
     "legacy_data": (409, "发现无归属的历史业务数据，请使用新的空运行目录"),
     "forbidden": (403, "当前账号无权执行此操作"),
     "invalid_username": (422, "账号名须为 3～64 位字母、数字、点、下划线或连字符，且以字母或数字开头"),
-    "invalid_password": (422, "密码长度须为 12～128 个字符"),
+    "invalid_password": (422, "密码长度须为 4～128 个字符"),
     "username_taken": (409, "账号名已存在"),
     "account_missing": (404, "账号不存在"),
 }
@@ -86,7 +86,7 @@ def _username(value: str) -> str:
 
 def _validate_password(password: str) -> None:
     # 不裁剪密码，空格也是密码的一部分。
-    if not 12 <= len(password) <= 128:
+    if not 4 <= len(password) <= 128:
         raise AccountError("invalid_password")
 
 
