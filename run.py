@@ -28,6 +28,7 @@ from config import config
 from database import init_db, get_config, set_config
 from services import llm_client
 from services.js_runtime import initialize_js_runtime
+from api.admin_routes import router as admin_router
 from api.auth_routes import router as auth_router
 from api.portfolio_routes import router as portfolio_router
 from api.market_routes import router as market_router
@@ -44,8 +45,7 @@ from services.sector_matrix import sector_matrix_prewarm_loop
 from services.coiled_scanner import coiled_prewarm_loop
 from services.portfolio_curve import curve_prewarm_loop
 from api.broker_routes import router as broker_router
-from api.ws import (router as ws_router, price_monitor_loop, backup_loop, briefing_loop,
-                    dca_loop, eod_summary_loop, rule_mine_loop)
+from api.ws import router as ws_router, price_monitor_loop, backup_loop
 from services import feishu_notify
 
 
@@ -155,64 +155,25 @@ async def lifespan(app: FastAPI):
         _mp = getattr(config, "market_provider", "") or ""
         if _mp:
             os.environ["MARKET_PROVIDER"] = _mp
-    _prov = await get_provider()
-    if _prov.capabilities:
-        print(f"扩展数据源已启用: {_prov.display_name} ({'/'.join(sorted(_prov.capabilities))})")
-    elif load_error():
-        print(f"扩展数据源未启用 —— {load_error()}")
-
-    # 知识星球(可选, 只读观点面): 选中的星球存在 app_config, token 由 CLI 放系统 Keychain
-    from services import zsxq_client
-    import json as _json
-    try:
-        _zg = _json.loads((await get_config("zsxq_groups")) or "[]")
-    except (ValueError, TypeError):
-        _zg = []
-    # URL 带 api_key: 只打印脱敏后的 host+path, 不打印整串
-    zsxq_client.configure(os.environ.get("ZSXQ_MCP_URL") or (await get_config("zsxq_mcp_url")) or "",
-                          _zg if isinstance(_zg, list) else [])
-    if zsxq_client.is_enabled():
-        print(f"知识星球已接入: {zsxq_client.endpoint_label()} · {len(zsxq_client.configured_groups())} 个星球(只读)")
-
-    # Restore saved feishu webhook config + 静音状态
-    url = await get_config("feishu_webhook_url")
-    if url:
-        feishu_notify.configure(url)
-    muted_val = await get_config("feishu_muted")
-    if muted_val == "1":
-        feishu_notify.set_muted(True)
-    if url:
-        print(f"飞书推送 {'静音中' if feishu_notify.is_muted() else '已启用'}")
-    task1 = asyncio.create_task(_wait_for_owned_dispatch("持仓行情推送"))
+    from services.scheduler import personal_loop, public_loop
+    task1 = asyncio.create_task(price_monitor_loop())
     task2 = asyncio.create_task(backup_loop())
-    task3 = asyncio.create_task(_wait_for_owned_dispatch("个人早盘简报"))
-    task4 = asyncio.create_task(_wait_for_owned_dispatch("个人定投自动任务"))
+    task4 = asyncio.create_task(personal_loop())
+    task12 = asyncio.create_task(public_loop())
     task5 = asyncio.create_task(news_prewarm_loop())
     task6 = asyncio.create_task(sector_matrix_prewarm_loop())
     task7 = asyncio.create_task(coiled_prewarm_loop())
-    task8 = asyncio.create_task(_wait_for_owned_dispatch("组合预热与快照"))
-    task9 = asyncio.create_task(_wait_for_owned_dispatch("个人收盘推送"))
     task10 = asyncio.create_task(_symbol_dict_prewarm())
-    task11 = asyncio.create_task(_wait_for_owned_dispatch("个人问答规则挖掘"))
     print(f"理财助手已启动: http://localhost:{config.port}")
     yield
     task1.cancel()
     task2.cancel()
-    task3.cancel()
     task4.cancel()
+    task12.cancel()
     task5.cancel()
     task7.cancel()
     task6.cancel()
-    task8.cancel()
-    task9.cancel()
     task10.cancel()
-    task11.cancel()
-
-
-async def _wait_for_owned_dispatch(name: str):
-    """A09/A10 接入 owner 调度前，不能把整个业务库当作一个匿名用户执行。"""
-    print(f"[identity] {name} 暂停：等待用户级后台调度（A09/A10）")
-    await asyncio.Event().wait()
 
 
 app = FastAPI(title="理财助手", lifespan=lifespan)
@@ -224,6 +185,7 @@ app.mount("/assets", StaticFiles(directory="static/assets"), name="assets")
 
 # Include routers
 app.include_router(auth_router)
+app.include_router(admin_router)
 app.include_router(portfolio_router)
 app.include_router(market_router)
 app.include_router(settings_router)
