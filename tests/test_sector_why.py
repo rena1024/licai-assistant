@@ -1,3 +1,4 @@
+import pytest
 import services.llm_client as llm
 import api.news_routes as news
 
@@ -41,3 +42,8 @@ def test_why_non_json_fallback(monkeypatch, authenticated_client):
     monkeypatch.setattr(llm, "call_claude", lambda *a, **k: "就是一段话不是JSON")
     r = client.post("/api/sector/why", json={"market": "HK", "name": "金融abc", "held": False})
     assert r.status_code == 200 and r.json()["why"]
+
+
+@pytest.fixture(autouse=True)
+def controlled_ai_protocol_unit_boundary(monkeypatch):
+    monkeypatch.setattr('services.ai_gate.require_controlled_ai',lambda:None)

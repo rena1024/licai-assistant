@@ -125,52 +125,16 @@ async def push_prices_once():
 
 
 async def price_monitor_loop():
+    from services.runtime_state import runtime_scope,RuntimeUnavailable
     while True:
         try:
-            await push_prices_once()
+            with runtime_scope():await push_prices_once()
+        except RuntimeUnavailable:
+            pass
         except Exception:
             print('[monitor] 行情推送失败')
         await asyncio.sleep(config.refresh_interval if any(markets_open().values()) else config.idle_interval)
 
 
-# --- Daily database backup ---
-_backup_done_date: str = ""
-
-async def backup_loop():
-    """Backup portfolio.db daily at 20:00 CST."""
-    global _backup_done_date
-    import shutil
-    from datetime import datetime, timezone, timedelta
-    from pathlib import Path
-
-    paths = get_runtime_paths()
-    paths.prepare()
-    backup_dir = paths.backups
-
-    while True:
-        try:
-            utc_now = datetime.now(timezone.utc)
-            cst_now = utc_now + timedelta(hours=8)
-            today = cst_now.strftime("%Y-%m-%d")
-            hour = cst_now.hour
-
-            if hour == 20 and today != _backup_done_date:
-                src = database_path(config.db_path)
-                if src.exists():
-                    dst = get_runtime_paths().file("backups", f"portfolio_{today}.db")
-                    import sqlite3
-                    with sqlite3.connect(src) as reader, sqlite3.connect(dst) as writer:
-                        reader.backup(writer)
-                    dst.chmod(0o600)
-                    _backup_done_date = today
-                    print(f"[backup] Database backed up to {dst}")
-
-                    # Keep only last 30 backups
-                    backups = sorted(backup_dir.glob("portfolio_*.db"))
-                    for old in backups[:-30]:
-                        old.unlink()
-
-            await asyncio.sleep(300)  # check every 5 minutes
-        except Exception as e:
-            print(f"[backup] Error: {e}")
-            await asyncio.sleep(300)
+# 兼容原启动导入路径；实现集中在可测试的维护作业中。
+from services.maintenance_jobs import backup_loop

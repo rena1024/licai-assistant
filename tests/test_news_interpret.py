@@ -1,3 +1,4 @@
+import pytest
 import services.llm_client as llm
 
 
@@ -93,3 +94,8 @@ def test_trim_tail_line_anchored_no_midbody_cut():
     assert "微信公众号粉丝突破千万" in out          # 句中提及保留
     assert "会员体系" in out                        # 正文完整
     assert "某某股票大涨" not in out                 # 行首'热门排行'区块截掉
+
+
+@pytest.fixture(autouse=True)
+def controlled_ai_protocol_unit_boundary(monkeypatch):
+    monkeypatch.setattr('services.ai_gate.require_controlled_ai',lambda:None)

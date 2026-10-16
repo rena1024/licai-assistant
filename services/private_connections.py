@@ -3,11 +3,11 @@ from __future__ import annotations
 import json
 import os
 import tempfile
-from threading import RLock
+from services.runtime_state import file_lock,check_generation
 from services.runtime_paths import get_runtime_paths
 from services.user_context import require_user_id
 
-_lock = RLock()
+_lock = file_lock
 
 
 def _path():
@@ -16,6 +16,7 @@ def _path():
 
 def get(name: str, default=None):
     with _lock:
+        check_generation()
         path = _path()
         if not path.exists():
             return default
@@ -24,6 +25,7 @@ def get(name: str, default=None):
 
 def save(name: str, value):
     with _lock:
+        check_generation()
         path = _path()
         values = json.loads(path.read_text()) if path.exists() else {}
         values[name] = value

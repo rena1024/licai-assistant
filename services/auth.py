@@ -157,7 +157,7 @@ class AuthenticationMiddleware(BaseHTTPMiddleware):
     """现有 HTTP 业务统一登录门禁；资源 owner 检查由 A04～A08 逐项接入。"""
     async def dispatch(self, request, call_next):
         path = request.url.path
-        if path.startswith("/api/") and not path.startswith("/api/auth/") and path != "/api/app-version":
+        if path.startswith("/api/") and not path.startswith("/api/auth/") and path not in {"/api/app-version","/api/health"}:
             try:
                 session = await require_session(request, csrf=request.method not in _SAFE_METHODS)
                 if path.startswith(('/api/settings/tdx', '/api/settings/proxy', '/api/settings/llm', '/api/admin/')) and session.account.role != 'admin':
@@ -168,8 +168,19 @@ class AuthenticationMiddleware(BaseHTTPMiddleware):
                 return JSONResponse({"detail": {"code": exc.code, "message": str(exc)}}, status_code=exc.status_code, headers={"Cache-Control": "no-store"})
             except HTTPException as exc:
                 return JSONResponse({"detail": exc.detail}, status_code=exc.status_code, headers={"Cache-Control": "no-store"})
+            from services.ai_gate import AI_ROUTES,require_controlled_ai,AIUnavailable
+            if (request.method,path.rstrip('/')) in AI_ROUTES:
+                try:require_controlled_ai()
+                except AIUnavailable as exc:
+                    return JSONResponse({'detail':{'code':exc.code,'message':str(exc)}},status_code=503)
             with user_scope(session.context.user_id):
                 response = await call_next(request)
+                if request.method not in _SAFE_METHODS and path.startswith('/api/settings/') and response.status_code<400:
+                    db=await get_db()
+                    try:
+                        await audit.record(db,action='configuration_changed',outcome='success',created_at=accounts._now(None),actor_id=session.context.user_id)
+                        await db.commit()
+                    finally:await db.close()
             response.headers["Cache-Control"] = "no-store"
             return response
         response = await call_next(request)

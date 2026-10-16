@@ -11,6 +11,8 @@ def ensure_active_sync():
     from services import accounts
     from services.runtime_paths import database_path
     from config import config
+    from services.runtime_state import check_generation
+    check_generation()
     uid = require_user_id()
     with sqlite3.connect(database_path(config.db_path)) as db:
         row = db.execute('SELECT active,auth_version FROM users WHERE id=?', (uid,)).fetchone()

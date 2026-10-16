@@ -50,7 +50,7 @@ def test_admin_user_management_and_route_access_matrix(owners):
     import re
     with TestClient(app) as anonymous:
         for route in app.routes:
-            if isinstance(route,APIRoute) and route.path.startswith('/api/') and not route.path.startswith('/api/auth/') and route.path!='/api/app-version':
+            if isinstance(route,APIRoute) and route.path.startswith('/api/') and not route.path.startswith('/api/auth/') and route.path not in {'/api/app-version','/api/health'}:
                 path=re.sub(r'\{[^}]+\}','1',route.path)
                 method=next(iter(route.methods))
                 assert anonymous.request(method,path).status_code==401,(method,path)

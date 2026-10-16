@@ -981,3 +981,8 @@ def active_owner():
     from tests.account_helpers import seed_owner
     asyncio.run(init_db())
     asyncio.run(seed_owner())
+
+
+@pytest.fixture(autouse=True)
+def controlled_ai_protocol_unit_boundary(monkeypatch):
+    monkeypatch.setattr('services.ai_gate.require_controlled_ai',lambda:None)

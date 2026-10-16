@@ -4,7 +4,7 @@ from __future__ import annotations
 import aiosqlite
 
 
-ACTIONS = frozenset({"user_enabled", "user_disabled", "bootstrap_issued", "bootstrap_completed", "user_created", "password_recovered", "password_reset", "login", "logout", "password_changed"})
+ACTIONS = frozenset({"configuration_changed", "backup_created", "backup_failed", "restore_completed", "restore_failed", "trace_changed", "retention_completed", "user_enabled", "user_disabled", "bootstrap_issued", "bootstrap_completed", "user_created", "password_recovered", "password_reset", "login", "logout", "password_changed"})
 OUTCOMES = frozenset({"success", "denied"})
 REASONS = frozenset({"", "bootstrap_closed", "invalid_bootstrap", "expired_bootstrap", "bootstrap_missing",
                      "legacy_data", "forbidden", "invalid_username", "invalid_password", "username_taken",
@@ -22,3 +22,13 @@ async def record(db: aiosqlite.Connection, *, action: str, outcome: str,
         "INSERT INTO audit_events (action, outcome, actor_id, target_id, reason, created_at) VALUES (?, ?, ?, ?, ?, ?)",
         (action, outcome, actor_id, target_id, reason, created_at),
     )
+
+
+async def management_event(action,*,actor_id=None):
+    import time
+    from database import get_db
+    db=await get_db()
+    try:
+        await record(db,action=action,outcome='success',created_at=int(time.time()),actor_id=actor_id)
+        await db.commit()
+    finally:await db.close()

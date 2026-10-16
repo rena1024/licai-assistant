@@ -94,7 +94,10 @@ async def personal_tick():
 
 async def personal_loop():
     while True:
-        await dispatch_personal(personal_tick)
+        from services.runtime_state import runtime_scope,RuntimeUnavailable
+        try:
+            with runtime_scope():await dispatch_personal(personal_tick)
+        except RuntimeUnavailable:pass
         await asyncio.sleep(60)
 
 
@@ -109,20 +112,25 @@ async def archive_public_close():
 
 async def public_loop():
     from services.market_data import _is_a_share_trading_day
+    from database import get_config,set_config
+    from services.runtime_state import runtime_scope,RuntimeUnavailable
     while True:
-        now = datetime.now(timezone(timedelta(hours=8)))
-        day = now.date().isoformat()
-        minutes = now.hour*60+now.minute
-        if 910 <= minutes <= 940 and _is_a_share_trading_day(now.date()):
-            from database import get_config,set_config
-            if await get_config('public_close_date') != day:
-                await set_config('public_close_date',day)
-                try:
-                    await archive_public_close()
-                    from services.limit_up_pool import warm_pool_klines
-                    from services.concept_trend import warm_cache
-                    await warm_pool_klines()
-                    await warm_cache()
-                except Exception:
-                    print('[scheduler] 公共收盘归档失败')
+        try:
+            # 整个 tick 共用代际，恢复后的下一轮重新获取代际。
+            with runtime_scope():
+                now = datetime.now(timezone(timedelta(hours=8)))
+                day = now.date().isoformat()
+                minutes = now.hour*60+now.minute
+                if 910 <= minutes <= 940 and _is_a_share_trading_day(now.date()):
+                    if await get_config('public_close_date') != day:
+                        await set_config('public_close_date',day)
+                        await archive_public_close()
+                        from services.limit_up_pool import warm_pool_klines
+                        from services.concept_trend import warm_cache
+                        await warm_pool_klines()
+                        await warm_cache()
+        except RuntimeUnavailable:
+            pass
+        except Exception:
+            print('[scheduler] 公共收盘归档失败')
         await asyncio.sleep(120)

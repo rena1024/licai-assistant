@@ -517,14 +517,47 @@ CREATE INDEX IF NOT EXISTS audit_events_created ON audit_events(created_at);
 
 
 async def get_db() -> aiosqlite.Connection:
-    path = database_path(config.db_path)
-    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-    if not path.exists():
-        path.touch(mode=0o600, exist_ok=True)
-    db = await aiosqlite.connect(path)
-    db.row_factory = aiosqlite.Row
-    await db.execute('PRAGMA foreign_keys = ON')
-    return db
+    from services import runtime_state
+    import sqlite3
+    key,generation=runtime_state.acquire_connection()
+    db=None
+    managed=False
+    try:
+        path = database_path(config.db_path)
+        path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        if not path.exists():path.touch(mode=0o600, exist_ok=True)
+        db = await aiosqlite.connect(path,cached_statements=0)
+        db.row_factory = aiosqlite.Row
+        await db.execute('PRAGMA foreign_keys = ON')
+        def authorize(*args):
+            try:
+                runtime_state.check_generation(generation)
+                return sqlite3.SQLITE_OK
+            except runtime_state.RuntimeUnavailable:
+                return sqlite3.SQLITE_DENY
+        await db.set_authorizer(authorize)
+        original_close=db.close
+        closed=False
+        async def close():
+            nonlocal closed
+            if closed:return
+            closed=True
+            import asyncio
+            operation=asyncio.create_task(original_close())
+            try:
+                await asyncio.shield(operation)
+            except asyncio.CancelledError:
+                await operation
+                raise
+            finally:runtime_state.release_connection(key)
+        db.close=close
+        managed=True
+        runtime_state.check_generation(generation)
+        return db
+    except BaseException:
+        if db is not None:await db.close()
+        if not managed:runtime_state.release_connection(key)
+        raise
 
 
 async def _portfolio_upgrade_tables(db) -> list[str]:

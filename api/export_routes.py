@@ -135,7 +135,6 @@ def _backup_current_db():
     source = database_path(config.db_path)
     stamp = datetime.now().strftime('%Y%m%d-%H%M%S')
     target = get_runtime_paths().file('backups', f'pre-import-{stamp}.db')
-    with sqlite3.connect(source) as reader, sqlite3.connect(target) as writer:
-        reader.backup(writer)
-    target.chmod(0o600)
-    return target
+    from services import backup
+    result=backup.create_backup(kind='protective')
+    return backup.validate_backup(result['id'])

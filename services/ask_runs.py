@@ -193,6 +193,8 @@ async def follow(run_id: str, cursor: int = 0):
         cursor = 0
     deadline = time.time() + _HARD_WALL_SEC
     while True:
+        from services.runtime_state import check_generation
+        check_generation()
         if cursor < len(run.events):
             ev = run.events[cursor]
             cursor += 1

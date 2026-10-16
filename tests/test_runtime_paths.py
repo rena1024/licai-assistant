@@ -131,6 +131,7 @@ def test_test_process_blocks_database_outside_sandbox(tmp_path):
 
 
 def test_test_profile_never_reads_keychain(monkeypatch):
+    monkeypatch.setattr("services.ai_gate.require_controlled_ai",lambda:None)
     from services import llm_client
 
     monkeypatch.setattr(llm_client, "_api_key", "")
@@ -219,6 +220,8 @@ def test_default_database_path_used_by_rule_and_tool_ledgers(tmp_path, monkeypat
 
     async def exercise():
         await init_db()
+        from tests.account_helpers import seed_owner
+        await seed_owner()
         await tool_gaps.record("fake_tool", {}, {"error": "synthetic failure"})
         assert (await tool_gaps.report())[0]["tool"] == "fake_tool"
         await rule_forge.add_candidate("synthetic title", "synthetic body", "synthetic evidence")

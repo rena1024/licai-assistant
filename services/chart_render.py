@@ -219,6 +219,9 @@ def render_trend_chart(bars: list, *, code: str = "", name: str = "",
 def save_png(png: bytes) -> str:
     """把 PNG 落盘到运行目录的 media，返回前端可访问的 URL。"""
     name = f"chart_{uuid.uuid4().hex}.png"
-    with get_runtime_paths().file("media", f"{require_user_id()}/{name}").open("wb") as f:
-        f.write(png)
+    from services.runtime_state import check_generation,file_lock
+    with file_lock:
+        check_generation()
+        with get_runtime_paths().file("media", f"{require_user_id()}/{name}").open("xb") as f:
+            f.write(png)
     return f"/api/ask/image/{name}"

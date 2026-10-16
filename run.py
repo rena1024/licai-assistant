@@ -28,6 +28,7 @@ from config import config
 from database import init_db, get_config, set_config
 from services import llm_client
 from services.js_runtime import initialize_js_runtime
+from api.operations_routes import router as operations_router
 from api.admin_routes import router as admin_router
 from api.auth_routes import router as auth_router
 from api.portfolio_routes import router as portfolio_router
@@ -72,6 +73,8 @@ async def lifespan(app: FastAPI):
     if paths.profile != "test":
         paths.check_legacy_database()
     paths.prepare()
+    from services.restore import recover_interrupted_restore
+    await asyncio.to_thread(recover_interrupted_restore)
     await init_db()
     if paths.profile == "test":
         # 不探测代理、不恢复真实凭证、不预热数据、不创建生产后台任务。
@@ -179,6 +182,8 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="理财助手", lifespan=lifespan)
 from services.auth import AuthenticationMiddleware
 app.add_middleware(AuthenticationMiddleware)
+from services.runtime_middleware import RuntimeSafetyMiddleware
+app.add_middleware(RuntimeSafetyMiddleware)
 
 # Mount static files (Vite build output)
 app.mount("/assets", StaticFiles(directory="static/assets"), name="assets")
@@ -186,6 +191,7 @@ app.mount("/assets", StaticFiles(directory="static/assets"), name="assets")
 # Include routers
 app.include_router(auth_router)
 app.include_router(admin_router)
+app.include_router(operations_router)
 app.include_router(portfolio_router)
 app.include_router(market_router)
 app.include_router(settings_router)
@@ -249,6 +255,14 @@ async def icon192():
 @app.get("/icon-512.svg")
 async def icon512():
     return FileResponse("static/icon-512.svg", media_type="image/svg+xml")
+
+
+@app.get('/api/health')
+async def health():
+    from services.health import health_status
+    from starlette.responses import JSONResponse
+    result,status=await asyncio.to_thread(health_status)
+    return JSONResponse(result,status_code=status,headers={'Cache-Control':'no-store'})
 
 
 if __name__ == "__main__":

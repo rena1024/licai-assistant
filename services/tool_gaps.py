@@ -161,9 +161,12 @@ async def record(tool: str, args: dict, out) -> None:
         import aiosqlite
         from config import config as _cfg
         from services.runtime_paths import database_path
-        async with aiosqlite.connect(database_path(_cfg.db_path)) as db:
+        from database import get_db
+        db=await get_db()
+        try:
             await db.execute('INSERT INTO tool_gap (user_id, tool, kind, market, hits, detail, sample)\n                   VALUES (?, ?, ?, ?, 1, ?, ?)\n                   ON CONFLICT(user_id, tool, kind, market) DO UPDATE SET\n                     hits = hits + 1, detail = excluded.detail,\n                     sample = excluded.sample, last_seen = CURRENT_TIMESTAMP', (user_id, tool, kind, market, detail, sample))
             await db.commit()
+        finally:await db.close()
     except Exception:
         pass
 
@@ -174,8 +177,11 @@ async def report(min_hits: int=1) -> list[dict]:
     import aiosqlite
     from config import config as _cfg
     from services.runtime_paths import database_path
-    async with aiosqlite.connect(database_path(_cfg.db_path)) as db:
+    from database import get_db
+    db=await get_db()
+    try:
         cur = await db.execute('SELECT tool, kind, market, hits, detail, sample, first_seen, last_seen\n               FROM tool_gap WHERE user_id = ? AND hits >= ? ORDER BY hits DESC, tool', (user_id, min_hits))
         rows = await cur.fetchall()
+    finally:await db.close()
     cols = ('tool', 'kind', 'market', 'hits', 'detail', 'sample', 'first_seen', 'last_seen')
     return [dict(zip(cols, r)) for r in rows]

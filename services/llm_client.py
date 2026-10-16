@@ -353,6 +353,8 @@ def _build_system(system: str | None, is_oauth: bool):
 
 def _post_with_fallback(headers: dict, payload: dict) -> requests.Response:
     """POST to API, falling back to direct if proxy errors."""
+    from services.ai_gate import require_controlled_ai
+    require_controlled_ai()
     api_url = _build_api_url()
     try:
         from services.task_context import ensure_active_sync
@@ -402,6 +404,8 @@ def _post_with_retry(headers: dict, payload: dict) -> requests.Response:
     (e.g. via `asyncio.to_thread`) — calling from an async event loop will
     freeze it for up to ~15s (过载档最坏情况 1+2+4+8s)。
     """
+    from services.ai_gate import require_controlled_ai
+    require_controlled_ai()
     api_url = _build_api_url()
     attempt = 0
     limit = _MAX_RETRIES          # 遇到过载状态码后按 _OVERLOAD_RETRIES 抬高
@@ -641,6 +645,8 @@ def call_claude(
 
     On 401 (OAuth expired): flush cache, re-resolve once.
     """
+    from services.ai_gate import require_controlled_ai
+    require_controlled_ai()
     model = resolve_model(model)
     token, is_oauth = _resolve_auth()
     headers = _build_headers(token, is_oauth)
@@ -695,6 +701,8 @@ def call_claude_messages(
     返回原始响应 dict (调用方自行看 stop_reason / content 里的 tool_use 块)。
     用于 agent loop。出错抛异常 (不走 CLI 兜底——CLI 不支持 tools)。
     """
+    from services.ai_gate import require_controlled_ai
+    require_controlled_ai()
     model = resolve_model(model)
     token, is_oauth = _resolve_auth()
     headers = _build_headers(token, is_oauth)
@@ -780,6 +788,8 @@ def _find_claude_cli() -> tuple[str | None, str | None]:
 
 def _call_via_cli(user_prompt: str, system: str | None, model: str, max_tokens: int) -> str:
     """Fallback: call Claude via the local CLI binary (refreshes OAuth internally)."""
+    from services.ai_gate import require_controlled_ai
+    require_controlled_ai()
     if is_test_profile():
         raise RuntimeError("测试模式禁止使用本机 Claude CLI 凭证")
     node_path, claude_path = _find_claude_cli()
