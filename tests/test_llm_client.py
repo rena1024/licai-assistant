@@ -972,3 +972,12 @@ def test_no_retry_when_already_at_cap(mock_post):
     mock_post.return_value = empty
     assert llm.call_claude("x", None, "claude-sonnet-5", llm._NO_TEXT_RETRY_CAP) == ""
     assert mock_post.call_count == 1
+
+
+@pytest.fixture(autouse=True)
+def active_owner():
+    import asyncio
+    from database import init_db
+    from tests.account_helpers import seed_owner
+    asyncio.run(init_db())
+    asyncio.run(seed_owner())

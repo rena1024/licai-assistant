@@ -2,8 +2,8 @@
 """打印工具缺口台账 —— "哪类数据长期取不到"。
 
     ./venv/bin/python scripts/tool_gaps.py
-    ./venv/bin/python scripts/tool_gaps.py --min 3      # 只看命中 3 次以上的
-    ./venv/bin/python scripts/tool_gaps.py --clear      # 修完一批后清空重新观察
+    ./venv/bin/python scripts/tool_gaps.py --user-id 2 --min 3      # 只看命中 3 次以上的
+    ./venv/bin/python scripts/tool_gaps.py --user-id 2 --clear      # 修完一批后清空重新观察
 
 四类: error(报错) / empty(返回但没内容) / stale(有数但最新时点早于今天) /
 zero_fields(关键字段被填成 0, 通常是解析漏读)。
@@ -21,21 +21,30 @@ _KIND_CN = {"error": "报错", "empty": "空", "stale": "过期", "zero_fields":
 
 async def main() -> int:
     ap = argparse.ArgumentParser()
+    ap.add_argument("--user-id", required=True, type=int, help="明确指定私人业务所属账号")
     ap.add_argument("--min", type=int, default=1, help="最少命中次数")
     ap.add_argument("--clear", action="store_true", help="清空台账")
     ap.add_argument("--db", default="")
     args = ap.parse_args()
 
+    from services.user_context import user_scope
+    with user_scope(args.user_id):
+        return await execute(args)
+
+
+async def execute(args) -> int:
     import config
     if args.db:
         config.config.db_path = args.db
     from services.runtime_paths import database_path
     config.config.db_path = str(database_path(config.config.db_path))
+    from services.task_context import ensure_active
+    await ensure_active()
 
     if args.clear:
         import aiosqlite
         async with aiosqlite.connect(config.config.db_path) as db:
-            await db.execute("DELETE FROM tool_gap")
+            await db.execute("DELETE FROM tool_gap WHERE user_id=?", (args.user_id,))
             await db.commit()
         print("台账已清空")
         return 0

@@ -426,7 +426,8 @@ def test_private_configuration_still_blocks_bootstrap_with_system_proxy(account_
     from services import accounts
 
     asyncio.run(set_config("network_proxy", "http://127.0.0.1:17890"))
-    asyncio.run(set_config("feishu_webhook_url", "synthetic-private-notification-target"))
+    with sqlite3.connect(account_db) as db:
+        db.execute("INSERT INTO app_config(key,value) VALUES ('feishu_webhook_url','synthetic-private-notification-target')")
     original = rows(account_db, "SELECT * FROM app_config ORDER BY key")
     with pytest.raises(accounts.AccountError, match="无归属|历史"):
         asyncio.run(accounts.issue_bootstrap_token(now=NOW))

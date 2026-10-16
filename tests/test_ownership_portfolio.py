@@ -183,7 +183,7 @@ def test_export_filters_owned_resources_and_import_cannot_replace_them(owners):
         exported = client.get('/api/data/export')
         assert [r['stock_code'] for r in exported.json()['tables']['holdings']] == ['600001']
         response = client.post('/api/data/import', files={'file':('owned.json', exported.content, 'application/json')})
-        assert response.status_code == 409
+        assert response.status_code == 200
     assert asyncio.run(db.get_holding('600000', user_id=a))['shares'] == 100
 
 
@@ -367,7 +367,7 @@ def test_legacy_config_import_cannot_clear_private_asset_state(owners):
         login = client.post('/api/auth/login', json={'username':'owner-b', 'password':'Synthetic-password-02!'})
         client.headers['X-CSRF-Token'] = login.json()['csrf_token']
         response = client.post('/api/data/import', files={'file':('legacy.json',payload,'application/json')})
-        assert response.status_code == 409
+        assert response.status_code == 400
         exported = client.get('/api/data/export').json()
         assert 'app_config' not in exported['tables']
     assert asyncio.run(db.get_config(key)) == '["US.TEST|2026-10-16"]'

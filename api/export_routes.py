@@ -1,173 +1,141 @@
-"""当前账号的持仓资产 JSON 导出。
-
-A04 仅导出已完成归属的资产表，结果不是完整备份。
-旧版整表导入暂停，待 A08 完成个人归属与 ID 校验。
-"""
+"""个人业务快照导入导出；认证、公共配置及费用账本不在业务白名单中。"""
 from __future__ import annotations
 import json
-import shutil
-import time
+import sqlite3
+import uuid
 from datetime import datetime
-from pathlib import Path
-
-import aiosqlite
 from fastapi import APIRouter, File, HTTPException, UploadFile
 from fastapi.responses import Response
-
-from config import config
-from database import get_db, OWNED_PORTFOLIO_TABLES
+from database import get_db
 from services.user_context import require_user_id
 
-
-router = APIRouter(prefix="/api/data", tags=["data"])
-
-
-# 哪些表要进 JSON dump. 顺序要满足外键 / 业务约束 (导入时按此顺序写入).
-# kline_cache 不导出 (可从网络重建).
-_TABLES = [
-    "holdings",
-    "external_assets",
-    "position_actions",
-    "unwind_plans",
-    "unwind_tranches",
-    "custom_alerts",
-    "alert_config",
-    "cashflow_monthly",
-    "morning_briefings",
-    "app_config",
-    "trade_log",
-]
-
-EXPORT_VERSION = 1
+router = APIRouter(prefix='/api/data', tags=['data'])
+# 顺序决定父子引用重建与反向清理顺序，外部 ID 永不直接写回。
+TABLES = ('holdings', 'external_assets', 'unwind_plans', 'unwind_tranches',
+          'position_actions', 'external_asset_actions', 'dca_schedules',
+          'trade_log', 'custom_alerts', 'alert_config', 'cashflow_monthly',
+          'brokers', 'watchlist', 'watchlist_group', 'position_thesis',
+          'thesis_revision', 'portfolio_snapshots', 'morning_briefings',
+          'ask_session', 'ask_message', 'ask_run', 'tool_gap', 'prompt_rule', 'user_settings')
+REFERENCES = {'external_asset_actions': {'asset_id': 'external_assets'},
+              'dca_schedules': {'asset_id': 'external_assets'},
+              'position_actions': {'tranche_id': 'unwind_tranches'},
+              'ask_message': {'session_id': 'ask_session'},
+              'ask_run': {'session_id': 'ask_session'},
+              'prompt_rule': {'session_id': 'ask_session'}}
+MAX_IMPORT_BYTES = 10 * 1024 * 1024
 
 
-async def _table_columns(db: aiosqlite.Connection, table: str) -> list[str]:
-    cursor = await db.execute(f"PRAGMA table_info({table})")
-    rows = await cursor.fetchall()
-    return [r[1] for r in rows]
+def _scope(table):
+    if table == 'dca_schedules':
+        return 'asset_id IN (SELECT id FROM external_assets WHERE user_id=?)'
+    return 'user_id=?'
 
 
-@router.get("/export")
+@router.get('/export')
 async def export_all():
-    """导出当前账号的持仓资产子集，返回 JSON 文件下载。"""
+    uid = require_user_id()
     db = await get_db()
-    out: dict = {
-        "_meta": {
-            "version": EXPORT_VERSION,
-            "exported_at": datetime.now().isoformat(timespec="seconds"),
-            "app": "licai",
-            "scope": "portfolio_assets_only",
-            "complete_backup": False,
-        },
-        "tables": {},
-    }
     try:
-        for t in OWNED_PORTFOLIO_TABLES:
-            try:
-                cursor = await db.execute(f"SELECT * FROM {t} WHERE user_id = ?", (require_user_id(),))
-                rows = await cursor.fetchall()
-                out["tables"][t] = [dict(r) for r in rows]
-            except Exception as e:
-                # 表不存在时跳过 (新装版本, 老 DB 缺表)
-                print(f"[export] skip {t}: {e}")
-                out["tables"][t] = []
+        await db.execute('BEGIN')
+        tables = {}
+        for table in TABLES:
+            rows = await (await db.execute(f'SELECT * FROM {table} WHERE {_scope(table)}', (uid,))).fetchall()
+            tables[table] = [{k: row[k] for k in row.keys() if k != 'user_id'} for row in rows if table != 'user_settings' or not (row['key'].startswith('task_done:') or row['key'] == 'automatic_ai_enabled')]
+        await db.commit()
     finally:
         await db.close()
-
-    body = json.dumps(out, ensure_ascii=False, indent=2, default=str).encode("utf-8")
-    fname = f"licai-backup-{datetime.now().strftime('%Y%m%d-%H%M')}.json"
-    return Response(
-        content=body,
-        media_type="application/json",
-        headers={
-            "Content-Disposition": f'attachment; filename="{fname}"',
-            "X-Export-Version": str(EXPORT_VERSION),
-        },
-    )
+    body = json.dumps({'_meta': {'version': 2, 'scope': 'personal_business', 'complete_backup': False,
+                               'exported_at': datetime.now().isoformat()}, 'tables': tables}, ensure_ascii=False)
+    return Response(body, media_type='application/json', headers={
+        'Content-Disposition': 'attachment; filename="licai-personal.json"', 'X-Export-Version': '2'})
 
 
-def _backup_current_db() -> Path:
-    """导入前先复制当前 DB 到 backups/, 失败时可手动还原."""
-    from services.runtime_paths import database_path, get_runtime_paths
-    src = database_path(config.db_path)
-    ts = datetime.now().strftime("%Y%m%d-%H%M%S")
-    dst = get_runtime_paths().file("backups", f"pre-import-{ts}.db")
-    shutil.copy2(src, dst)
-    return dst
-
-
-@router.post("/import")
-async def import_all(file: UploadFile = File(...), mode: str = "replace"):
-    """从上传 JSON 还原. mode=replace 清空表后导入; mode=merge 仅 upsert (cashflow / app_config 类 PK 表)."""
-    if mode not in ("replace", "merge"):
-        raise HTTPException(400, "mode 必须是 replace 或 merge")
-    raw = await file.read()
-    if not raw:
-        raise HTTPException(400, "文件为空")
+@router.post('/import')
+async def import_all(file: UploadFile = File(...), mode: str = 'replace'):
+    if mode not in {'replace', 'merge'}:
+        raise HTTPException(400, 'mode 必须是 replace 或 merge')
+    raw = await file.read(MAX_IMPORT_BYTES + 1)
+    if len(raw) > MAX_IMPORT_BYTES:
+        raise HTTPException(413, '导入文件不能超过 10 MB')
     try:
         payload = json.loads(raw)
-    except json.JSONDecodeError as e:
-        raise HTTPException(400, f"JSON 解析失败: {e}")
-
-    if not isinstance(payload, dict) or "tables" not in payload:
-        raise HTTPException(400, "格式错误: 缺少 tables 字段")
-    if any(table in _TABLES or table in OWNED_PORTFOLIO_TABLES for table in payload['tables']):
-        # 旧导入会整表删除且复用外部 ID；个人导入合同完成前不得触及已归属资源。
-        raise HTTPException(409, '旧版整表导入已暂停，待 A08 完成个人归属与 ID 校验；原数据未修改')
-    meta = payload.get("_meta", {})
-    if int(meta.get("version", 0)) > EXPORT_VERSION:
-        raise HTTPException(400, f"备份文件版本 {meta.get('version')} 比当前应用 ({EXPORT_VERSION}) 还新, 不兼容")
-
-    backup_path = _backup_current_db()
-
+    except (ValueError, UnicodeDecodeError):
+        raise HTTPException(400, '导入文件不是有效 JSON') from None
+    tables = payload.get('tables') if isinstance(payload, dict) else None
+    if not isinstance(tables, dict) or not tables or set(tables) - set(TABLES):
+        raise HTTPException(400, '只允许导入个人业务白名单中的表')
+    uid = require_user_id()
+    _backup_current_db()
     db = await get_db()
-    summary: dict[str, int] = {}
     try:
-        await db.execute("BEGIN")
-        for t in _TABLES:
-            rows = payload["tables"].get(t)
-            if rows is None:
+        await db.execute('BEGIN IMMEDIATE')
+        columns = {}
+        for table, rows in tables.items():
+            columns[table] = {r['name'] for r in await (await db.execute(f'PRAGMA table_info({table})')).fetchall()}
+            if not isinstance(rows, list) or any(not isinstance(row, dict) or 'user_id' in row or set(row)-columns[table] for row in rows):
+                raise ValueError('数据行包含非法字段或伪造身份')
+        if mode == 'replace':
+            for table in reversed(TABLES):
+                scope = _scope(table)
+                if table == 'user_settings':
+                    scope += " AND key NOT LIKE 'task_done:%' AND key != 'automatic_ai_enabled'"
+                await db.execute(f'DELETE FROM {table} WHERE {scope}', (uid,))
+        mapping, summary = {}, {}
+        for table in TABLES:
+            if table not in tables:
                 continue
-            cols = await _table_columns(db, t)
-            if not cols:
-                continue  # 表不存在
-            # 过滤备份里多余的字段 (新版备份导回老 DB)
-            valid_rows = []
-            for r in rows:
-                if not isinstance(r, dict):
-                    continue
-                valid_rows.append({k: v for k, v in r.items() if k in cols})
-            if mode == "replace":
-                await db.execute(f"DELETE FROM {t}")
-            inserted = 0
-            for r in valid_rows:
-                if not r:
-                    continue
-                keys = list(r.keys())
-                placeholders = ",".join(["?"] * len(keys))
-                col_list = ",".join(keys)
-                values = [r[k] for k in keys]
-                if mode == "merge":
-                    sql = f"INSERT OR REPLACE INTO {t} ({col_list}) VALUES ({placeholders})"
-                else:
-                    sql = f"INSERT INTO {t} ({col_list}) VALUES ({placeholders})"
-                try:
-                    await db.execute(sql, values)
-                    inserted += 1
-                except Exception as e:
-                    print(f"[import] skip row in {t}: {e}")
-            summary[t] = inserted
-        await db.execute("COMMIT")
-    except Exception as e:
-        try: await db.execute("ROLLBACK")
-        except Exception: pass
-        raise HTTPException(500, f"导入失败 (已自动备份至 {backup_path.name}, 可手动还原): {e}")
+            mapping[table] = {}
+            count = 0
+            for original in tables[table]:
+                row = dict(original)
+                if table == 'user_settings' and (row.get('key','').startswith('task_done:') or row.get('key') == 'automatic_ai_enabled'):
+                    raise ValueError('不能导入后台执行状态')
+                old_id = row.pop('id', None)
+                for key, parent in REFERENCES.get(table, {}).items():
+                    value = row.get(key)
+                    if value is not None:
+                        if value not in mapping.get(parent, {}):
+                            raise ValueError('关联资源必须在同一文件中提供，不能引用已有或他人的 ID')
+                        row[key] = mapping[parent][value]
+                if table != 'dca_schedules':
+                    row['user_id'] = uid
+                if table == 'portfolio_snapshots' and row.get('by_asset'):
+                    values = json.loads(row['by_asset'])
+                    row['by_asset'] = json.dumps({f"EXT:{mapping['external_assets'][int(key[4:])]}" if key.startswith('EXT:') else key:value for key,value in values.items()})
+                if table == 'ask_run':
+                    row['run_id'] = uuid.uuid4().hex
+                    row['status'] = 'interrupted'
+                keys = list(row)
+                if not keys:
+                    raise ValueError('不能导入空数据行')
+                # merge 只按本人自然键合并；主键 ID 全部由数据库重新生成。
+                conflict = ' ON CONFLICT DO UPDATE SET ' + ','.join(f'{k}=excluded.{k}' for k in keys if k != 'user_id') if mode == 'merge' else ''
+                cursor = await db.execute(f"INSERT INTO {table} ({','.join(keys)}) VALUES ({','.join('?' for _ in keys)}){conflict}", tuple(row[k] for k in keys))
+                if old_id is not None:
+                    if type(old_id) is not int or old_id in mapping[table]:
+                        raise ValueError('资源 ID 无效或重复')
+                    mapping[table][old_id] = cursor.lastrowid
+                count += 1
+            summary[table] = count
+        await db.commit()
+    except (ValueError, sqlite3.DatabaseError, TypeError, KeyError, AttributeError):
+        await db.rollback()
+        raise HTTPException(400, '个人数据格式或关联关系无效，导入已全部撤销') from None
     finally:
         await db.close()
+    return {'message': '导入完成', 'mode': mode, 'imported': summary}
 
-    return {
-        "message": "导入完成",
-        "mode": mode,
-        "pre_import_backup": str(backup_path.name),
-        "imported": summary,
-    }
+
+
+def _backup_current_db():
+    """SQLite 在线备份保留一致视图，并验证目标路径不越出运行目录。"""
+    from services.runtime_paths import get_runtime_paths, database_path
+    from config import config
+    source = database_path(config.db_path)
+    stamp = datetime.now().strftime('%Y%m%d-%H%M%S')
+    target = get_runtime_paths().file('backups', f'pre-import-{stamp}.db')
+    with sqlite3.connect(source) as reader, sqlite3.connect(target) as writer:
+        reader.backup(writer)
+    target.chmod(0o600)
+    return target

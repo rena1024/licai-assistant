@@ -4,6 +4,7 @@
 
 红涨绿跌(A股惯例), 配色对齐 App 深色主题。"""
 from __future__ import annotations
+from services.user_context import require_user_id
 import io
 import os
 import threading
@@ -218,6 +219,6 @@ def render_trend_chart(bars: list, *, code: str = "", name: str = "",
 def save_png(png: bytes) -> str:
     """把 PNG 落盘到运行目录的 media，返回前端可访问的 URL。"""
     name = f"chart_{uuid.uuid4().hex}.png"
-    with get_runtime_paths().file("media", name).open("wb") as f:
+    with get_runtime_paths().file("media", f"{require_user_id()}/{name}").open("wb") as f:
         f.write(png)
     return f"/api/ask/image/{name}"

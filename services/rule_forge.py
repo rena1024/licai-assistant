@@ -13,6 +13,7 @@
 approve 才进 prompt。pending 的一律不进。
 """
 from __future__ import annotations
+from services.user_context import require_user_id
 import json
 import re
 
@@ -182,49 +183,47 @@ async def _conn():
 
 
 async def fetch_messages() -> list[dict]:
+    user_id = require_user_id()
     db = await _conn()
     try:
-        cur = await db.execute(
-            "SELECT session_id, role, content FROM ask_message ORDER BY session_id, id")
-        return [{"session_id": r[0], "role": r[1], "content": r[2]} for r in await cur.fetchall()]
+        cur = await db.execute('SELECT session_id, role, content FROM ask_message WHERE user_id = ? ORDER BY session_id, id', (user_id,))
+        return [{'session_id': r[0], 'role': r[1], 'content': r[2]} for r in await cur.fetchall()]
     finally:
         await db.close()
 
 
 async def add_candidate(title: str, body: str, evidence: str, session_id=None) -> bool:
     """插入候选。同标题已存在(任何状态)就不重复插 —— 免得同一类纠正反复提案。"""
+    user_id = require_user_id()
     db = await _conn()
     try:
-        cur = await db.execute("SELECT 1 FROM prompt_rule WHERE title = ?", (title,))
+        cur = await db.execute('SELECT 1 FROM prompt_rule WHERE user_id = ? AND title = ?', (user_id, title))
         if await cur.fetchone():
             return False
-        await db.execute(
-            "INSERT INTO prompt_rule (title, body, evidence, session_id) VALUES (?, ?, ?, ?)",
-            (title, body, evidence[:500], session_id))
+        await db.execute('INSERT INTO prompt_rule (user_id, title, body, evidence, session_id) VALUES (?, ?, ?, ?, ?)', (user_id, title, body, evidence[:500], session_id))
         await db.commit()
         return True
     finally:
         await db.close()
 
 
-async def list_rules(status: str = "") -> list[dict]:
+async def list_rules(status: str='') -> list[dict]:
+    user_id = require_user_id()
     db = await _conn()
     try:
-        sql = ("SELECT id, title, body, status, evidence, created_at FROM prompt_rule"
-               + (" WHERE status = ?" if status else "") + " ORDER BY id")
-        cur = await db.execute(sql, (status,) if status else ())
-        cols = ("id", "title", "body", "status", "evidence", "created_at")
+        sql = 'SELECT id, title, body, status, evidence, created_at FROM prompt_rule WHERE user_id=?' + (' AND status = ?' if status else '') + ' ORDER BY id'
+        cur = await db.execute(sql, (user_id, status) if status else (user_id,))
+        cols = ('id', 'title', 'body', 'status', 'evidence', 'created_at')
         return [dict(zip(cols, r)) for r in await cur.fetchall()]
     finally:
         await db.close()
 
 
 async def decide(rule_id: int, status: str) -> bool:
+    user_id = require_user_id()
     db = await _conn()
     try:
-        cur = await db.execute(
-            "UPDATE prompt_rule SET status = ?, decided_at = CURRENT_TIMESTAMP WHERE id = ?",
-            (status, rule_id))
+        cur = await db.execute('UPDATE prompt_rule SET status = ?, decided_at = CURRENT_TIMESTAMP WHERE user_id = ? AND id = ?', (status, user_id, rule_id))
         await db.commit()
         return cur.rowcount > 0
     finally:
@@ -236,17 +235,17 @@ def active_rules_sync() -> list[dict]:
 
     读不到就返回空 —— 表还没建、库被占用都不该让整个 agent 起不来。
     """
+    user_id = require_user_id()
     try:
         import sqlite3
         from config import config as _cfg
         from services.runtime_paths import database_path
         con = sqlite3.connect(database_path(_cfg.db_path), timeout=1.0)
         try:
-            rows = con.execute("SELECT title, body FROM prompt_rule "
-                               "WHERE status = 'active' ORDER BY id").fetchall()
+            rows = con.execute("SELECT title, body FROM prompt_rule WHERE user_id = ? AND status = 'active' ORDER BY id", (user_id,)).fetchall()
         finally:
             con.close()
-        return [{"title": t, "body": b} for t, b in rows]
+        return [{'title': t, 'body': b} for t, b in rows]
     except Exception:
         return []
 
@@ -257,10 +256,11 @@ async def known_evidence() -> set:
     每周自动挖时用它跳过老对话: 一是省额度(一条起草要调一次模型), 二是**被否决过的不能
     再提** —— 去重要对着"见过的", 不是对着"批准的", 否则否掉的规则每周原样回来。
     """
+    user_id = require_user_id()
     db = await _conn()
     try:
-        cur = await db.execute("SELECT evidence FROM prompt_rule WHERE evidence <> ''")
-        return {(r[0] or "").strip() for r in await cur.fetchall()}
+        cur = await db.execute("SELECT evidence FROM prompt_rule WHERE user_id = ? AND evidence <> ''", (user_id,))
+        return {(r[0] or '').strip() for r in await cur.fetchall()}
     finally:
         await db.close()
 
@@ -305,20 +305,20 @@ async def mine_new(max_drafts: int = 3) -> dict:
 
 
 async def decide_by_evidence(evidence: str, status: str) -> None:
+    user_id = require_user_id()
     db = await _conn()
     try:
-        await db.execute(
-            "UPDATE prompt_rule SET status = ?, decided_at = CURRENT_TIMESTAMP "
-            "WHERE evidence = ? AND status = 'pending'", (status, (evidence or "")[:500]))
+        await db.execute("UPDATE prompt_rule SET status = ?, decided_at = CURRENT_TIMESTAMP WHERE user_id = ? AND evidence = ? AND status = 'pending'", (status, user_id, (evidence or '')[:500]))
         await db.commit()
     finally:
         await db.close()
 
 
 async def pending_count() -> int:
+    user_id = require_user_id()
     db = await _conn()
     try:
-        cur = await db.execute("SELECT COUNT(*) FROM prompt_rule WHERE status = 'pending'")
+        cur = await db.execute("SELECT COUNT(*) FROM prompt_rule WHERE user_id = ? AND status = 'pending'", (user_id,))
         return (await cur.fetchone())[0]
     finally:
         await db.close()

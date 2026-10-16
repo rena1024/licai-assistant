@@ -160,6 +160,8 @@ class AuthenticationMiddleware(BaseHTTPMiddleware):
         if path.startswith("/api/") and not path.startswith("/api/auth/") and path != "/api/app-version":
             try:
                 session = await require_session(request, csrf=request.method not in _SAFE_METHODS)
+                if path.startswith(('/api/settings/tdx', '/api/settings/proxy', '/api/settings/llm', '/api/admin/')) and session.account.role != 'admin':
+                    raise HTTPException(403, '仅管理员可管理公共配置')
                 if session.account.must_change_password:
                     raise HTTPException(403, {"code": "password_change_required", "message": "请先修改临时密码"})
             except accounts.AccountError as exc:

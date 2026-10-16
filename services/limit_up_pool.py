@@ -23,6 +23,7 @@
 那一侧, 本模块只认它返回的行结构。
 """
 from __future__ import annotations
+from services.user_context import require_user_id
 import asyncio
 from datetime import datetime, timedelta, timezone
 
@@ -118,15 +119,25 @@ async def sync_day(day: str, *, allow_provider: bool = False, with_theme: bool =
             if not r.get("theme") and tmap.get(r["stock_code"]):
                 r["theme"] = tmap[r["stock_code"]]
                 themed += 1
-    saved = await save_limit_up_pool(rows)
+    if src == 'provider' or themed:
+        import json
+        from database import set_user_setting
+        await set_user_setting(f'provider_pool:{day}', json.dumps(rows,ensure_ascii=False),user_id=require_user_id())
+        # 私人题材补充不覆盖共享的公开来源行。
+        if src == 'em':
+            public_rows = await asyncio.to_thread(_fetch_em_sync,day)
+            await save_limit_up_pool(public_rows)
+        saved = len(rows)
+    else:
+        saved = await save_limit_up_pool(rows)
     return {"date": day, "n": len(rows), "source": src, "themed": themed, "saved": saved}
 
 
-async def sync_today() -> dict:
+async def sync_today(*, public: bool = False) -> dict:
     """收盘钩子用。封单额是盘口快照 —— 收盘后取到的才是定格值, 盘中取到的会变。
     顺带从扩展源补题材标签(东财只给行业, 题材=炒作主线得靠扩展源); 没接扩展源就只是没题材。"""
     today = datetime.now(tz=_CST).strftime("%Y-%m-%d")
-    return await sync_day(today, with_theme=True)
+    return await sync_day(today, with_theme=not public)
 
 
 async def backfill(start: str, end: str, *, sleep: float = 0.25,
@@ -138,7 +149,7 @@ async def backfill(start: str, end: str, *, sleep: float = 0.25,
     from services.market_data import _is_a_share_trading_day
     d0 = datetime.strptime(start, "%Y-%m-%d").date()
     d1 = datetime.strptime(end, "%Y-%m-%d").date()
-    have = {r["date"] for r in await list_limit_up_days(limit=10000)} if not overwrite else set()
+    have = {r["date"] for r in await list_limit_up_days(limit=10000,user_id=require_user_id())} if not overwrite else set()
     days, rows, skipped, empty = 0, 0, 0, []
     d = d0
     while d <= d1:
@@ -217,7 +228,7 @@ async def quality(day: str | None = None) -> dict:
     """某一天涨停的**质量**画像。没有那天的档案就明说, 不编。"""
     if not day:
         day = datetime.now(tz=_CST).strftime("%Y-%m-%d")
-    rows = await get_limit_up_pool(day)
+    rows = await get_limit_up_pool(day,user_id=require_user_id())
     if not rows:
         return {"date": day, "有档案": False,
                 "note": f"{day} 没有逐只涨停档案(当天还没收盘落档, 或早于回填区间)"}
@@ -252,7 +263,7 @@ async def quality(day: str | None = None) -> dict:
                      for k, v in by_theme.items()),
                     key=lambda x: (-x["只数"], -x["封单亿"]))[:8] or None
     # 与上一个有档案的交易日比: 封单总额的方向比绝对值更说明问题
-    hist = await list_limit_up_days(limit=2, end=day)
+    hist = await list_limit_up_days(limit=2,end=day,user_id=require_user_id())
     prev = hist[0] if len(hist) > 1 else None
     return {
         "date": day, "有档案": True, "涨停只数": n,
@@ -301,13 +312,13 @@ async def seal_backtest(days: int = 250, min_per_bucket: int = 20) -> dict:
     **它不是可交易信号**: 封单厚恰恰意味着你排不进那个队。这是用来解释和复盘盘面强弱的,
     不是用来决定买卖的。
     """
-    hist = await list_limit_up_days(limit=days)
+    hist = await list_limit_up_days(limit=days,user_id=require_user_id())
     if not hist:
         return {"可用": False, "note": "还没有涨停档案, 先跑 backfill"}
     sample: list[dict] = []
     total, covered = 0, 0
     for h in hist:
-        rows = await get_limit_up_pool(h["date"])
+        rows = await get_limit_up_pool(h["date"],user_id=require_user_id())
         if not rows:
             continue
         codes = [r["stock_code"] for r in rows]

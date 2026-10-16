@@ -47,7 +47,7 @@ async def take_snapshot() -> dict | None:
     return {"snap_date": snap_date, "total_value": total, "assets": len(by)}
 
 
-_hk_refreshed: str = ""          # 已在港股收盘后重记过的日期(进程内; 重启后最多多覆盖一次, 同日覆盖写无害)
+_hk_refreshed: dict = {}          # 已在港股收盘后重记过的日期(进程内; 重启后最多多覆盖一次, 同日覆盖写无害)
 _HK_REFRESH_AT = 16 * 60 + 10    # 港股 16:00 收盘(港时=北京时间), 留 10 分钟等收盘竞价定格
 
 
@@ -85,14 +85,14 @@ async def maybe_snapshot() -> None:
     rows = await list_portfolio_snapshots(limit=1, user_id=require_user_id())
     today = now.strftime("%Y-%m-%d")
     if rows and rows[0]["snap_date"] == today:
-        if now.hour * 60 + now.minute < _HK_REFRESH_AT or _hk_refreshed == today:
+        if now.hour * 60 + now.minute < _HK_REFRESH_AT or _hk_refreshed.get(require_user_id()) == today:
             return
         from services.dca import _is_market_trading_day
         if not _needs_hk_refresh(now, await _holds_hk(), _is_market_trading_day(now.date(), "HK"),
-                                 _hk_refreshed):
-            _hk_refreshed = today        # 不持港股/港股休市: 今天不用再查
+                                 _hk_refreshed.get(require_user_id(), "")):
+            _hk_refreshed[require_user_id()] = today        # 不持港股/港股休市: 今天不用再查
             return
-        _hk_refreshed = today
+        _hk_refreshed[require_user_id()] = today
         r = await take_snapshot()
         if r:
             print(f"[snapshot] {r['snap_date']} 港股收盘后重记 总市值 {r['total_value']} ({r['assets']} 项)")
@@ -100,7 +100,7 @@ async def maybe_snapshot() -> None:
     r = await take_snapshot()
     if r:
         if now.hour * 60 + now.minute >= _HK_REFRESH_AT:
-            _hk_refreshed = today        # 首次快照就已在港股收盘之后, 无需再覆盖
+            _hk_refreshed[require_user_id()] = today        # 首次快照就已在港股收盘之后, 无需再覆盖
         print(f"[snapshot] {r['snap_date']} 总市值 {r['total_value']} ({r['assets']} 项)")
 
 

@@ -7,6 +7,7 @@
 这里测的就是这两条反过来: 停止跟看 ≠ 取消(run 照跑完, 答案自己落库), 以及问题在开跑那
 一刻就已经在库里(哪怕答案还没出来, 历史里也看得见"我问过什么")。
 """
+from services.user_context import require_user_id
 import asyncio
 import os
 import tempfile
@@ -22,6 +23,8 @@ def temp_db(monkeypatch):
     monkeypatch.setattr("config.config.db_path", path)
     from database import init_db
     asyncio.run(init_db())
+    from tests.account_helpers import seed_owner
+    asyncio.run(seed_owner())
     yield path
     os.unlink(path)
 
@@ -59,7 +62,7 @@ def _fake_agent(events=EVENTS, delay=0.0, seen=None):
 
 def _msgs(session_id):
     from database import get_ask_session
-    s = asyncio.run(get_ask_session(session_id))
+    s = asyncio.run(get_ask_session(session_id, user_id=require_user_id()))
     return s["messages"] if s else []
 
 
@@ -132,7 +135,7 @@ def test_question_is_in_history_before_the_answer(temp_db, runs, monkeypatch):
 
     async def main():
         run = await runs.start("茅台今天怎么了")
-        sessions = await list_ask_sessions()
+        sessions = await list_ask_sessions(user_id=require_user_id())
         run.task.cancel()
         await asyncio.sleep(0)
         return sessions, run
@@ -275,7 +278,7 @@ def test_events_are_on_disk_while_running(temp_db, runs, monkeypatch):
         return run
 
     run = asyncio.run(main())
-    row = asyncio.run(get_ask_run(run.id))
+    row = asyncio.run(get_ask_run(run.id, user_id=require_user_id()))
     assert row and row["status"] == "done" and row["answered"] == 1
     kinds = [e.get("type") for e in json.loads(row["events"])]
     assert "answer" in kinds and kinds[-1] == "done"
@@ -292,9 +295,11 @@ def _leftover_row(run_id="deadbeef1234", events=None, scope="market"):
     import time as _t
 
     async def go():
-        await save_ask_run(run_id, 1, scope, "茅台今天怎么了", _t.time())
+        from database import create_ask_session
+        await create_ask_session('test', user_id=require_user_id())
+        await save_ask_run(run_id, 1, scope, "茅台今天怎么了", _t.time(), user_id=require_user_id())
         if events:
-            await update_ask_run(run_id, json.dumps(events, ensure_ascii=False), "running", False, _t.time())
+            await update_ask_run(run_id, json.dumps(events, ensure_ascii=False), "running", False, _t.time(), user_id=require_user_id())
     asyncio.run(go())
     return run_id
 
@@ -304,9 +309,9 @@ def test_restart_marks_running_as_interrupted(temp_db, runs):
     永远转不完的"分析中"。"""
     from database import get_ask_run, interrupt_running_ask_runs
     rid = _leftover_row()
-    assert asyncio.run(get_ask_run(rid))["status"] == "running"
+    assert asyncio.run(get_ask_run(rid, user_id=require_user_id()))["status"] == "running"
     assert asyncio.run(interrupt_running_ask_runs()) == 1
-    assert asyncio.run(get_ask_run(rid))["status"] == "interrupted"
+    assert asyncio.run(get_ask_run(rid, user_id=require_user_id()))["status"] == "interrupted"
 
 
 def test_follow_falls_back_to_disk_after_restart(temp_db, runs):

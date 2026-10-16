@@ -95,7 +95,7 @@ export function ZsxqSection() {
         </button>
       </div>
       <p className="text-[11px] text-text-muted mb-2 leading-relaxed">
-        URL 里带 api_key —— 存在本机数据库、不进代码库、界面只回显 <span className="font-mono">host/path</span>。
+        URL 里带 api_key —— 按当前账号存在本机运行目录、不进代码库、界面只回显 <span className="font-mono">host/path</span>。
         端点从知识星球官方 MCP 服务拿。
       </p>
       <div className="flex items-center gap-3 mb-2">

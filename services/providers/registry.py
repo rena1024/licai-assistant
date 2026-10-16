@@ -27,6 +27,7 @@ display_name 那种要实例化才拿得到的东西。
 """
 from __future__ import annotations
 
+from services.user_context import require_user_id
 import importlib
 import os
 
@@ -36,9 +37,7 @@ _ENV_KEY = "MARKET_PROVIDER"
 _CONFIG_KEY = "market_provider"
 _EP_GROUP = "licai.providers"       # 已装 provider 包在这个组里登记自己
 
-_cache: MarketProvider | None = None
-_cache_spec: str | None = None
-_load_error: str = ""
+_instances: dict = {}
 
 
 async def _configured_spec() -> str:
@@ -100,7 +99,9 @@ def _instantiate(spec: str) -> MarketProvider:
     path = _resolve(spec)
     mod_name, _, attr = path.partition(":")
     obj = getattr(importlib.import_module(mod_name), attr)
-    inst = obj() if isinstance(obj, type) else obj
+    if not isinstance(obj, type):
+        raise TypeError('provider 必须提供可独立实例化的类')
+    inst = obj()
     if not isinstance(inst, MarketProvider):
         raise TypeError(f"{path} 不是 MarketProvider 的实现")
     return inst
@@ -108,27 +109,25 @@ def _instantiate(spec: str) -> MarketProvider:
 
 async def get_provider() -> MarketProvider:
     """当前生效的 provider。没配 / 配错 → NullProvider。按 spec 缓存, 配置变了自动重建。"""
-    global _cache, _cache_spec, _load_error
+    uid = require_user_id()
     spec = await _configured_spec()
-    if _cache is not None and _cache_spec == spec:
-        return _cache
-    if not spec:
-        _cache, _cache_spec, _load_error = NullProvider(), spec, ""
-        return _cache
+    cached = _instances.get(uid)
+    if cached and cached[0] == spec:
+        return cached[1]
     try:
-        _cache, _load_error = _instantiate(spec), ""
-    except Exception as e:
-        _cache, _load_error = NullProvider(), f"加载 provider {spec!r} 失败: {e}"
-    _cache_spec = spec
-    return _cache
+        instance = _instantiate(spec) if spec else NullProvider()
+        error = ''
+    except Exception:
+        instance, error = NullProvider(), '扩展来源加载失败，请检查安装与配置'
+    _instances[uid] = (spec, instance, error)
+    return instance
 
 
 def load_error() -> str:
     """上一次加载失败的原因(空=没失败)。设置页用它把"配错了"和"没配"区分开。"""
-    return _load_error
+    return _instances.get(require_user_id(), ('', None, ''))[2]
 
 
 def reset_cache() -> None:
     """配置改动后调一次, 下次 get_provider 重新加载。"""
-    global _cache, _cache_spec, _load_error
-    _cache, _cache_spec, _load_error = None, None, ""
+    _instances.pop(require_user_id(), None)

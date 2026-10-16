@@ -17,6 +17,7 @@
 只按 (工具, 类型, 市场) 聚合计数, 不存每次调用: 目的是"哪类数据长期取不到", 不是审计。
 """
 from __future__ import annotations
+from services.user_context import require_user_id
 import json
 import re
 from datetime import datetime, timedelta, timezone
@@ -149,6 +150,7 @@ def classify(tool: str, args: dict, out, cutoff=None) -> tuple[str, str] | None:
 
 async def record(tool: str, args: dict, out) -> None:
     """best-effort 记账。任何异常都不能连累工具调用本身。"""
+    user_id = require_user_id()
     try:
         hit = classify(tool, args, out)
         if not hit:
@@ -157,32 +159,23 @@ async def record(tool: str, args: dict, out) -> None:
         market = _market_of(args)
         sample = json.dumps(args or {}, ensure_ascii=False)[:160]
         import aiosqlite
-        # 用单例 config, 不是 Config 类 —— 类属性只是 dataclass 的默认值, 改它不生效,
-        # 会静默连到默认的 portfolio.db(真实账本)。这个坑今天踩了三次。
         from config import config as _cfg
         from services.runtime_paths import database_path
         async with aiosqlite.connect(database_path(_cfg.db_path)) as db:
-            await db.execute(
-                """INSERT INTO tool_gap (tool, kind, market, hits, detail, sample)
-                   VALUES (?, ?, ?, 1, ?, ?)
-                   ON CONFLICT(tool, kind, market) DO UPDATE SET
-                     hits = hits + 1, detail = excluded.detail,
-                     sample = excluded.sample, last_seen = CURRENT_TIMESTAMP""",
-                (tool, kind, market, detail, sample))
+            await db.execute('INSERT INTO tool_gap (user_id, tool, kind, market, hits, detail, sample)\n                   VALUES (?, ?, ?, ?, 1, ?, ?)\n                   ON CONFLICT(user_id, tool, kind, market) DO UPDATE SET\n                     hits = hits + 1, detail = excluded.detail,\n                     sample = excluded.sample, last_seen = CURRENT_TIMESTAMP', (user_id, tool, kind, market, detail, sample))
             await db.commit()
     except Exception:
-        pass          # 记账失败不该影响回答
+        pass
 
 
-async def report(min_hits: int = 1) -> list[dict]:
+async def report(min_hits: int=1) -> list[dict]:
     """读台账, 按命中次数倒序。"""
+    user_id = require_user_id()
     import aiosqlite
     from config import config as _cfg
     from services.runtime_paths import database_path
     async with aiosqlite.connect(database_path(_cfg.db_path)) as db:
-        cur = await db.execute(
-            """SELECT tool, kind, market, hits, detail, sample, first_seen, last_seen
-               FROM tool_gap WHERE hits >= ? ORDER BY hits DESC, tool""", (min_hits,))
+        cur = await db.execute('SELECT tool, kind, market, hits, detail, sample, first_seen, last_seen\n               FROM tool_gap WHERE user_id = ? AND hits >= ? ORDER BY hits DESC, tool', (user_id, min_hits))
         rows = await cur.fetchall()
-    cols = ("tool", "kind", "market", "hits", "detail", "sample", "first_seen", "last_seen")
+    cols = ('tool', 'kind', 'market', 'hits', 'detail', 'sample', 'first_seen', 'last_seen')
     return [dict(zip(cols, r)) for r in rows]

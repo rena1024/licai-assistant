@@ -355,8 +355,12 @@ def _post_with_fallback(headers: dict, payload: dict) -> requests.Response:
     """POST to API, falling back to direct if proxy errors."""
     api_url = _build_api_url()
     try:
+        from services.task_context import ensure_active_sync
+        ensure_active_sync()
         return _llm_session.post(api_url, headers=headers, json=payload, timeout=_HTTP_TIMEOUT)
     except requests.exceptions.ProxyError:
+        from services.task_context import ensure_active_sync
+        ensure_active_sync()
         return _direct_session.post(api_url, headers=headers, json=payload, timeout=_HTTP_TIMEOUT)
 
 
@@ -404,10 +408,14 @@ def _post_with_retry(headers: dict, payload: dict) -> requests.Response:
 
     while True:
         try:
+            from services.task_context import ensure_active_sync
+            ensure_active_sync()
             resp = _llm_session.post(api_url, headers=headers, json=payload, timeout=_HTTP_TIMEOUT)
         except requests.exceptions.ProxyError:
             # Proxy unreachable, try direct session once per attempt
             try:
+                from services.task_context import ensure_active_sync
+                ensure_active_sync()
                 resp = _direct_session.post(api_url, headers=headers, json=payload, timeout=_HTTP_TIMEOUT)
             except _RETRYABLE_EXC as e:
                 if attempt >= limit:

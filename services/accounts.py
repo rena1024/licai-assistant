@@ -45,7 +45,7 @@ _PRIVATE_TABLES = (
     "holdings", "trade_log", "alert_config", "custom_alerts", "unwind_plans", "unwind_tranches",
     "external_assets", "position_actions", "morning_briefings", "portfolio_snapshots", "watchlist",
     "watchlist_group", "cashflow_monthly", "external_asset_actions", "dca_schedules", "position_thesis",
-    "thesis_revision", "ask_session", "ask_message", "ask_run", "tool_gap", "prompt_rule",
+    "thesis_revision", "ask_session", "ask_message", "ask_run", "tool_gap", "prompt_rule", "user_settings",
 )
 
 
@@ -322,3 +322,46 @@ async def recover_admin_password(*, password: str, now: int | None = None) -> Ac
         user = await _replace_password(db, row["id"], password, timestamp)
         await audit.record(db, action="password_recovered", outcome="success", created_at=timestamp, target_id=user.id)
         return user
+
+
+async def list_users(*, actor_id: int) -> list[Account]:
+    db = await get_db()
+    try:
+        await _require_admin(db, actor_id)
+        rows = await (await db.execute('SELECT * FROM users ORDER BY id')).fetchall()
+        return [_account(row) for row in rows]
+    finally:
+        await db.close()
+
+
+async def set_user_active(*, actor_id: int, user_id: int, active: bool) -> Account:
+    async with _transaction('user_enabled' if active else 'user_disabled', now=None, actor_id=actor_id, target_id=user_id) as db:
+        await _require_admin(db, actor_id)
+        row = await (await db.execute('SELECT * FROM users WHERE id=?', (user_id,))).fetchone()
+        if not row:
+            raise AccountError('account_missing')
+        if row['role'] == 'admin':
+            raise AccountError('forbidden')
+        if bool(row['active']) != active:
+            timestamp = _now(None)
+            await db.execute('UPDATE users SET active=?,auth_version=auth_version+1 WHERE id=?', (int(active),user_id))
+            await db.execute('UPDATE sessions SET revoked_at=? WHERE user_id=? AND revoked_at IS NULL', (timestamp,user_id))
+            if active:
+                # 启用不补跑停用期间漏掉的定投，保持原本的频率和选择。
+                from datetime import date
+                from services.dca import initial_next_due, _market_of_asset_name
+                rows = await (await db.execute("SELECT s.*,a.name AS asset_name FROM dca_schedules s JOIN external_assets a ON a.id=s.asset_id WHERE a.user_id=? AND s.next_due<=?", (user_id,date.today().isoformat()))).fetchall()
+                for schedule in rows:
+                    due = initial_next_due(schedule['frequency'],schedule['day_of_month'],schedule['day_of_week'],market=_market_of_asset_name(schedule['asset_name'] or ''))
+                    await db.execute('UPDATE dca_schedules SET next_due=? WHERE id=?', (due,schedule['id']))
+            await audit.record(db, action='user_enabled' if active else 'user_disabled', outcome='success', created_at=timestamp, actor_id=actor_id,target_id=user_id)
+        result = _account(await (await db.execute('SELECT * FROM users WHERE id=?', (user_id,))).fetchone())
+    if not active:
+        from services import ask_runs, scheduler
+        for run in list(ask_runs._RUNS.values()):
+            if run.user_id == user_id and run.task and not run.done:
+                run.task.cancel()
+        scheduler.cancel_user(user_id)
+        from api.ws import disconnect_user
+        await disconnect_user(user_id)
+    return result

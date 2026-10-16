@@ -170,6 +170,8 @@ def wf_db(monkeypatch):
     monkeypatch.setattr("config.config.db_path", path)   # 单例, 不是 Config 类
     from database import init_db
     asyncio.run(init_db())
+    from tests.account_helpers import seed_owner
+    asyncio.run(seed_owner())
     yield path
     os.unlink(path)
 
@@ -178,9 +180,9 @@ def _seed_messages(path, rows):
     import sqlite3
     con = sqlite3.connect(path)
     try:
-        con.execute("INSERT OR IGNORE INTO ask_session (id, title) VALUES (1, 't')")
+        con.execute("INSERT OR IGNORE INTO ask_session (user_id, id, title) VALUES (1, 1, 't')")
         for role, content in rows:
-            con.execute("INSERT INTO ask_message (session_id, role, content) VALUES (1,?,?)",
+            con.execute("INSERT INTO ask_message (user_id, session_id, role, content) VALUES (1, 1,?,?)",
                         (role, content))
         con.commit()
     finally:

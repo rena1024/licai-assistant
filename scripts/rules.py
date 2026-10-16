@@ -1,11 +1,11 @@
 #!/usr/bin/env python
 """从历次"用户纠正"里挖候选规则, 人批准后才进 system prompt。
 
-    ./venv/bin/python scripts/rules.py --mine        # 挖掘 + 起草(要调模型)
-    ./venv/bin/python scripts/rules.py               # 看队列
-    ./venv/bin/python scripts/rules.py --approve 3   # 批准第 3 条 → 进 prompt
-    ./venv/bin/python scripts/rules.py --reject 4
-    ./venv/bin/python scripts/rules.py --diff        # 看批准后 prompt 会多出什么
+    ./venv/bin/python scripts/rules.py --user-id 2 --mine        # 挖掘 + 起草(要调模型)
+    ./venv/bin/python scripts/rules.py --user-id 2               # 看队列
+    ./venv/bin/python scripts/rules.py --user-id 2 --approve 3   # 批准第 3 条 → 进 prompt
+    ./venv/bin/python scripts/rules.py --user-id 2 --reject 4
+    ./venv/bin/python scripts/rules.py --user-id 2 --diff        # 看批准后 prompt 会多出什么
 
 pending 的规则一律不进 prompt。批准前建议先跑一遍 evals/run.py, 批准后再跑一遍 ——
 一条坏规则会静默影响所有回答, 而回归集只有 8 例, 兜不住。
@@ -83,6 +83,7 @@ async def cmd_diff() -> int:
 
 async def main() -> int:
     ap = argparse.ArgumentParser()
+    ap.add_argument("--user-id", required=True, type=int, help="明确指定私人业务所属账号")
     ap.add_argument("--mine", action="store_true")
     ap.add_argument("--approve", type=int)
     ap.add_argument("--reject", type=int)
@@ -91,18 +92,26 @@ async def main() -> int:
     ap.add_argument("--db", default="")
     args = ap.parse_args()
 
+    from services.user_context import user_scope
+    with user_scope(args.user_id):
+        return await execute(args)
+
+
+async def execute(args) -> int:
     import config
     if args.db:
         config.config.db_path = args.db
     from services.runtime_paths import database_path
     config.config.db_path = str(database_path(config.config.db_path))
+    from services.task_context import ensure_active
+    await ensure_active()
     print(f"账本={config.config.db_path}\n")
 
     from services import rule_forge as rf
     if args.clear_pending:
         import aiosqlite
         async with aiosqlite.connect(config.config.db_path) as db:
-            cur = await db.execute("DELETE FROM prompt_rule WHERE status = 'pending'")
+            cur = await db.execute("DELETE FROM prompt_rule WHERE status = 'pending' AND user_id=?", (args.user_id,))
             await db.commit()
         print(f"清掉 {cur.rowcount} 条待审")
         return 0

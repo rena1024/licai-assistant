@@ -4,7 +4,7 @@ from __future__ import annotations
 import aiosqlite
 
 
-ACTIONS = frozenset({"bootstrap_issued", "bootstrap_completed", "user_created", "password_recovered", "password_reset", "login", "logout", "password_changed"})
+ACTIONS = frozenset({"user_enabled", "user_disabled", "bootstrap_issued", "bootstrap_completed", "user_created", "password_recovered", "password_reset", "login", "logout", "password_changed"})
 OUTCOMES = frozenset({"success", "denied"})
 REASONS = frozenset({"", "bootstrap_closed", "invalid_bootstrap", "expired_bootstrap", "bootstrap_missing",
                      "legacy_data", "forbidden", "invalid_username", "invalid_password", "username_taken",

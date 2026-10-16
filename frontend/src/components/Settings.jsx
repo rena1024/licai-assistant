@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import AdminUsers from './AdminUsers'
 import { api, fetchJSON } from '../hooks/useApi'
 import { AttributionSection } from './settings/AttributionSection'
 import { ProviderSection } from './settings/ProviderSection'
@@ -10,6 +11,7 @@ import { ZsxqSection } from './settings/ZsxqSection'
 
 
 export default function Settings({ onClose }) {
+  const [admin, setAdmin] = useState(false)
   const [url, setUrl] = useState('')
   const [status, setStatus] = useState({ text: '', ok: null })
   const [saving, setSaving] = useState(false)
@@ -27,11 +29,14 @@ export default function Settings({ onClose }) {
   }
 
   useEffect(() => {
+    let active = true
+    fetchJSON('/api/auth/me').then(data => { if (active) setAdmin(data.account.role === 'admin') }).catch(() => {})
     api.getFeishuConfig().then(d => {
       setUrl(d.webhook_url || '')
       if (d.enabled) setStatus({ text: '已启用', ok: true })
     })
     loadOkxStatus()
+    return () => { active = false }
   }, [])
 
   const saveOkx = async () => {
@@ -133,7 +138,7 @@ export default function Settings({ onClose }) {
 
         {/* 本地代理 (OKX/外发统一) */}
         <div className="mt-2 pt-4 border-t border-border">
-          <ProxySection />
+          {admin && <ProxySection />}
         </div>
 
         {/* OKX API 凭证 */}
@@ -153,7 +158,7 @@ export default function Settings({ onClose }) {
           <p className="text-[11px] text-text-muted mb-2 leading-relaxed">
             用于自动同步网格/马丁格尔机器人的本金和盈亏。<span className="text-[var(--color-signal-moderate)]">
             只需勾选 <code className="bg-surface-3 px-1 rounded">Read</code> 权限</span>，
-            禁用交易/提币 scope。凭证存入 macOS Keychain，不写数据库。
+            禁用交易/提币 scope。凭证按当前账号保存在本机运行目录，仅本机运行账号可读写。
             <br />
             获取路径：OKX App → 账户 → API → 创建 API Key（IP 白名单填你的出口 IP，或留空）
           </p>
@@ -199,7 +204,7 @@ export default function Settings({ onClose }) {
 
         {/* LLM 配置 */}
         <div className="mt-2 pt-4 border-t border-border">
-          <LLMConfigSection />
+          {admin && <LLMConfigSection />}
         </div>
 
         {/* 知识星球(可选, 只读) */}
@@ -209,7 +214,8 @@ export default function Settings({ onClose }) {
 
         {/* 扩展数据源(可选): 深度龙虎榜席位身份 / 竞价异动 / 机构增仓等自带公开源没有的口径 */}
         <div className="mt-2 pt-4 border-t border-border">
-          <ProviderSection />
+          <ProviderSection admin={admin} />
+          {admin && <AdminUsers />}
         </div>
 
         {/* OKX 策略之外的现货 */}

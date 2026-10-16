@@ -41,6 +41,8 @@ def temp_db(monkeypatch):
     monkeypatch.setattr("config.config.db_path", path)
     from database import init_db
     asyncio.run(init_db())
+    from tests.account_helpers import seed_owner
+    asyncio.run(seed_owner())
     yield path
     os.unlink(path)
 
@@ -294,7 +296,7 @@ def test_sync_day_fills_missing_theme_without_touching_em_fields(temp_db, monkey
     _stub_themes(monkeypatch, lambda day: {"600000": "光模块、CPO/MPO"})
     r = asyncio.run(lup.sync_day("2026-08-20", with_theme=True))
     assert r["source"] == "em" and r["themed"] == 1
-    got = asyncio.run(get_limit_up_pool("2026-08-20"))[0]
+    got = asyncio.run(get_limit_up_pool("2026-08-20",user_id=1))[0]
     assert got["theme"] == "光模块、CPO/MPO"
     assert got["industry"] == "通信设备"        # 东财的行业没被题材顶掉
     assert got["broken_times"] == 2 and got["turnover"] == 8.5 and got["source"] == "em"
@@ -332,7 +334,7 @@ def test_mixed_rows_only_fill_the_empty_ones(temp_db, monkeypatch):
     _stub_themes(monkeypatch, lambda day: {"600000": "别的题材", "600001": "光模块、CPO/MPO"})
     r = asyncio.run(lup.sync_day("2026-08-20", with_theme=True))
     assert r["themed"] == 1                    # 只补了缺的那一行
-    by = {x["stock_code"]: x for x in asyncio.run(get_limit_up_pool("2026-08-20"))}
+    by = {x["stock_code"]: x for x in asyncio.run(get_limit_up_pool("2026-08-20",user_id=1))}
     assert by["600000"]["theme"] == "自带题材"          # 已有的没被顶掉
     assert by["600001"]["theme"] == "光模块、CPO/MPO"
 

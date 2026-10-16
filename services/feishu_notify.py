@@ -4,49 +4,44 @@ import asyncio
 import json
 import requests as _requests
 
-# Webhook URL, set via API or config
-_webhook_url: str = ""
-_configured: bool = False  # 是否配过 webhook
-_muted: bool = False       # 是否被用户主动静音 (持久化到 DB)
+from services import private_connections
 
 
 def configure(webhook_url: str):
-    global _webhook_url, _configured
-    _webhook_url = webhook_url.strip()
-    _configured = bool(_webhook_url)
+    private_connections.save('feishu_webhook', webhook_url.strip())
 
 
 def set_muted(muted: bool):
-    global _muted
-    _muted = bool(muted)
+    private_connections.save('feishu_muted', bool(muted))
 
 
 def is_muted() -> bool:
-    return _muted
+    return private_connections.get('feishu_muted', False)
 
 
 def is_enabled() -> bool:
-    """既配过 webhook 又没被静音才推送."""
-    return _configured and not _muted
+    return bool(private_connections.get('feishu_webhook', '') and not is_muted())
 
 
 def _send_sync(payload: dict) -> bool:
     if not is_enabled():
         return False
+    from services.task_context import ensure_active_sync
+    ensure_active_sync()
     try:
         resp = _requests.post(
-            _webhook_url,
+            private_connections.get('feishu_webhook', ''),
             json=payload,
             headers={"Content-Type": "application/json"},
             timeout=5,
         )
         data = resp.json()
         if data.get("code") != 0 and data.get("StatusCode") != 0:
-            print(f"[feishu] Send failed: {data}")
+            print("[feishu] 推送服务拒绝请求")
             return False
         return True
     except Exception as e:
-        print(f"[feishu] Error: {e}")
+        print("[feishu] 推送连接失败")
         return False
 
 

@@ -1,7 +1,7 @@
 """Settings REST endpoints for notification config and custom alerts."""
 from __future__ import annotations
 import time
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, field_validator
 from typing import Optional
 
@@ -145,9 +145,14 @@ class ProviderConfig(BaseModel):
 
 
 @router.post("/provider")
-async def set_provider_config(data: ProviderConfig):
+async def set_provider_config(data: ProviderConfig, request: Request):
     """装/换 provider, 和/或存凭证。两件事可以一次做完, 也可以分两次。"""
     from services.providers import get_provider, reset_cache
+    if data.spec is not None and request.state.user:
+        from services import auth
+        session = await auth.require_session(request)
+        if session.account.role != 'admin':
+            raise HTTPException(403, '扩展来源代码由管理员配置')
     if data.spec is not None:
         await set_config("market_provider", (data.spec or "").strip())
         import os
@@ -163,14 +168,14 @@ async def set_provider_config(data: ProviderConfig):
         try:
             saved = await p.save_credentials({k: v for k, v in data.values.items() if k in allowed})
         except Exception as e:
-            return {"ok": False, "note": f"存凭证失败: {e}", **(await _provider_state())}
+            return {"ok": False, "note": "存凭证失败，请检查接入配置", **(await _provider_state())}
     state = await _provider_state()
     return {"ok": bool(saved["ok"]) if saved else True,
             "note": (saved or {}).get("note", ""), **state}
 
 
 @router.delete("/provider")
-async def clear_provider_config():
+async def clear_provider_config(request: Request):
     """清凭证并卸掉 provider。顺序不能反 —— 先卸了就没人知道该清哪些键了。"""
     from services.providers import get_provider, reset_cache
     p = await get_provider()
@@ -179,9 +184,12 @@ async def clear_provider_config():
             await p.clear_credentials()
         except Exception:
             pass
-    await set_config("market_provider", "")
-    import os
-    os.environ.pop("MARKET_PROVIDER", None)
+    from services import auth
+    session = await auth.require_session(request)
+    if session.account.role == 'admin':
+        await set_config('market_provider','')
+        import os
+        os.environ.pop('MARKET_PROVIDER',None)
     reset_cache()
     return {"ok": True, **(await _provider_state())}
 
@@ -214,10 +222,8 @@ async def list_zsxq_groups():
 async def set_zsxq_config(data: ZsxqConfig):
     import json as _json
     if data.url is not None:
-        await set_config("zsxq_mcp_url", data.url)
         zsxq_client.configure(url=data.url)
     if data.groups is not None:
-        await set_config("zsxq_groups", _json.dumps(data.groups, ensure_ascii=False))
         zsxq_client.configure(groups=data.groups)
     return {"message": "saved", "enabled": zsxq_client.is_enabled(),
             "endpoint": zsxq_client.endpoint_label(),
@@ -280,9 +286,11 @@ class FeishuConfig(BaseModel):
 
 @router.get("/feishu")
 async def get_feishu_config():
-    url = await get_config("feishu_webhook_url") or ""
+    from services import private_connections
+    url = private_connections.get('feishu_webhook', '')
     return {
-        "webhook_url": url,
+        "webhook_url": "",
+        "configured": bool(url),
         "enabled": feishu_notify.is_enabled(),
         "muted": feishu_notify.is_muted(),
     }
@@ -290,7 +298,6 @@ async def get_feishu_config():
 
 @router.post("/feishu")
 async def save_feishu_config(data: FeishuConfig):
-    await set_config("feishu_webhook_url", data.webhook_url)
     feishu_notify.configure(data.webhook_url)
     return {"message": "保存成功", "enabled": feishu_notify.is_enabled()}
 
@@ -303,7 +310,6 @@ class FeishuMute(BaseModel):
 async def set_feishu_mute(data: FeishuMute):
     """切换飞书推送静音 (用于前端"通知开/关"按钮联动后端)."""
     feishu_notify.set_muted(data.muted)
-    await set_config("feishu_muted", "1" if data.muted else "0")
     return {"muted": data.muted, "enabled": feishu_notify.is_enabled()}
 
 

@@ -60,7 +60,7 @@ export function PromptRulesSection() {
       </div>
       <p className="text-[11px] text-text-muted mb-2">
         从你历次「不对/怎么还是」这类纠正里自动起草。<b>批准了才进 prompt</b>，待审的一条都不生效 ——
-        prompt 对单个词都敏感，一条坏规则会静默影响所有回答。每周一自动挖一次。
+        prompt 对单个词都敏感，一条坏规则会静默影响所有回答。自动 AI 默认关闭，开放并启用后按计划挖掘。
       </p>
       {pending.length === 0 && (
         <p className="text-[11px] text-text-muted">待审队列是空的。</p>

@@ -9,7 +9,7 @@ import { fetchJSON } from '../../hooks/useApi'
 
    表单是**通用的**: 要填哪几个字段由 provider 自己声明(后端 /api/settings/provider 的 fields),
    这里照着渲染 —— 换一个 provider 不用改这个组件。secret 字段只存不回显。 */
-export function ProviderSection() {
+export function ProviderSection({ admin = false }) {
   const [st, setSt] = useState(null)
   const [spec, setSpec] = useState('')
   const [vals, setVals] = useState({})
@@ -33,7 +33,7 @@ export function ProviderSection() {
     setBusy('clear')
     try {
       const r = await fetchJSON('/api/settings/provider', { method: 'DELETE' })
-      setSt(r); setSpec(''); setVals({}); setMsg({ text: '已卸载', ok: null })
+      setSt(r); setSpec(''); setVals({}); setMsg({ text: admin ? '已卸载' : '本人凭证已清除', ok: null })
     } catch (e) { setMsg({ text: String(e?.message || e), ok: false }) } finally { setBusy('') }
   }
 
@@ -61,7 +61,7 @@ export function ProviderSection() {
       </p>
 
       {/* provider 入口: "包名:类名"。留空 = 不接入 */}
-      <div className="flex items-center gap-2 mb-2">
+      {admin && <div className="flex items-center gap-2 mb-2">
         <input className="flex-1 bg-bg border border-border rounded px-3 py-1.5 text-[12px] text-text font-mono outline-none focus:border-accent"
           placeholder="provider 入口，如 mypkg.provider:Provider（留空=不接入）"
           value={spec} onChange={e => setSpec(e.target.value)} autoComplete="off" spellCheck={false} />
@@ -73,9 +73,9 @@ export function ProviderSection() {
           <button onClick={clear} disabled={!!busy}
             className="px-3 py-1.5 rounded-md border border-border text-text-dim text-[12px] hover:text-text disabled:opacity-40 cursor-pointer">卸载</button>
         )}
-      </div>
+      </div>}
 
-      {!!candidates.length && (
+      {admin && !!candidates.length && (
         <div className="flex items-baseline gap-2 flex-wrap mb-2">
           <span className="text-[11px] text-text-muted shrink-0">已装可选：</span>
           {candidates.map(d => (
@@ -87,6 +87,8 @@ export function ProviderSection() {
           ))}
         </div>
       )}
+
+      {!admin && installed && fields.length > 0 && <button type="button" onClick={clear} disabled={!!busy} className="mb-2 text-sm text-accent">清除本人凭证</button>}
 
       {st?.load_error && <div className="text-[11px] text-bear mb-2 break-all">{st.load_error}</div>}
 

@@ -17,6 +17,7 @@
 这时前端续拉会拿到一条明确的提示, 让人去历史里翻原文, 而不是空转。
 """
 from __future__ import annotations
+from services.user_context import require_user_id
 import asyncio
 import json as _json
 import time
@@ -43,6 +44,7 @@ class Run:
     """一问一答的一次执行。events 是只追加的事件流, 下标即游标 —— 前端断开重连靠它对齐。"""
 
     def __init__(self, question: str, session_id: int, scope: str, title: str):
+        self.user_id = require_user_id()
         self.id = uuid.uuid4().hex[:12]
         self.question = question
         self.session_id = session_id
@@ -69,7 +71,7 @@ class Run:
         status = ("done" if self.done else "running")
         try:
             await update_ask_run(self.id, _json.dumps(self.events, ensure_ascii=False),
-                                 status, self.answered, self._flushed_at)
+                                 status, self.answered, self._flushed_at, user_id=require_user_id())
         except Exception:
             pass                            # 落盘失败不该影响正在跑的这一轮
 
@@ -99,6 +101,8 @@ async def _drive(run: Run, events) -> None:
     cancelled = False
     try:
         async for ev in events:
+            from services.task_context import ensure_active
+            await ensure_active()
             run.events.append(ev)
             await run.flush()               # 合并窗口内不重复写
             t = ev.get("type")
@@ -121,7 +125,7 @@ async def _drive(run: Run, events) -> None:
                 "sources": sources, "charts": charts}
         try:
             await add_ask_message(run.session_id, "assistant", answer,
-                                  _json.dumps(meta, ensure_ascii=False))
+                                  _json.dumps(meta, ensure_ascii=False), user_id=require_user_id())
             run.answered = True
         except Exception as e:
             run.events.append({"type": "error", "error": f"答案没能落库: {e}"})
@@ -141,21 +145,36 @@ async def start(question: str, *, agent_question: Optional[str] = None,
     question 是给人看的原话; agent_question 是真正喂给 agent 的(抽屉会前缀上"名称(代码): ")。
     events 可传一条自定义事件流(如多视角对抗); 不传就走默认的问答 agent。
     """
+    from services.task_context import ensure_active
+    version = await ensure_active()
     _gc()
+    if session_id:
+        from database import get_ask_session
+        if not await get_ask_session(session_id, user_id=require_user_id()):
+            from fastapi import HTTPException
+            raise HTTPException(404, '会话不存在')
     if not session_id:
-        session_id = await create_ask_session((title or question)[:80])
+        session_id = await create_ask_session((title or question)[:80], user_id=require_user_id())
     await add_ask_message(session_id, "user", question,
-                          _json.dumps(user_meta, ensure_ascii=False) if user_meta else "")
+                          _json.dumps(user_meta, ensure_ascii=False) if user_meta else "", user_id=require_user_id())
     run = Run(question, session_id, scope, title or question)
     _RUNS[run.id] = run
     try:                                    # 先建流水行: 之后每次 flush 都是 UPDATE
-        await save_ask_run(run.id, session_id, scope, question, run.started_at)
-        await prune_ask_runs()
+        await save_ask_run(run.id, session_id, scope, question, run.started_at, user_id=require_user_id())
+        await prune_ask_runs(user_id=require_user_id())
     except Exception:
         pass
     stream = events if events is not None else ask_stock_stream(
         agent_question or question, history or [], images)
-    run.task = asyncio.create_task(_drive(run, stream))
+    async def owned_drive():
+        from services.task_context import _version, ensure_active
+        token = _version.set(version)
+        try:
+            await ensure_active()
+            await _drive(run, stream)
+        finally:
+            _version.reset(token)
+    run.task = asyncio.create_task(owned_drive())
     return run
 
 
@@ -165,7 +184,7 @@ async def follow(run_id: str, cursor: int = 0):
     内存里没有就回盘上找: 重启之后那一轮的过程还在(状态已标 interrupted), 至少能看到它
     走到哪一步, 而不是一句"不在内存里了"。
     """
-    run = _RUNS.get(run_id)
+    run = get(run_id)
     if not run:
         async for ev in _follow_from_db(run_id, cursor):
             yield ev
@@ -191,7 +210,7 @@ async def follow(run_id: str, cursor: int = 0):
 async def _follow_from_db(run_id: str, cursor: int):
     """重放盘上那一轮(它一定已经结束了 —— 进程都换了, 原来的 task 不可能还在)。"""
     try:
-        row = await get_ask_run(run_id)
+        row = await get_ask_run(run_id, user_id=require_user_id())
     except Exception:
         row = None
     if not row:
@@ -211,7 +230,8 @@ async def _follow_from_db(run_id: str, cursor: int):
 
 
 def get(run_id: str) -> Optional[Run]:
-    return _RUNS.get(run_id)
+    run = _RUNS.get(run_id)
+    return run if run and run.user_id == require_user_id() else None
 
 
 async def live(scope: Optional[str] = None) -> list[dict]:
@@ -220,10 +240,10 @@ async def live(scope: Optional[str] = None) -> list[dict]:
     盘上那些一律 done=true —— 它们不可能再产出新事件了, 前端不该去"接着等"。
     """
     _gc()
-    out = [r.brief() for r in _RUNS.values() if not scope or r.scope == scope]
+    out = [r.brief() for r in _RUNS.values() if r.user_id == require_user_id() and (not scope or r.scope == scope)]
     seen = {x["run_id"] for x in out}
     try:
-        for row in await list_ask_runs(limit=20):
+        for row in await list_ask_runs(limit=20, user_id=require_user_id()):
             if row["run_id"] in seen or (scope and row.get("scope") != scope):
                 continue
             out.append({"run_id": row["run_id"], "session_id": row.get("session_id"),
@@ -239,7 +259,7 @@ async def live(scope: Optional[str] = None) -> list[dict]:
 
 def cancel(run_id: str) -> bool:
     """真取消(点"新对话"/明确停掉时用)。跟"前端走开"区分开: 走开不取消。"""
-    run = _RUNS.get(run_id)
+    run = get(run_id)
     if not run or run.done or not run.task:
         return False
     run.task.cancel()

@@ -1,12 +1,13 @@
 """问股票为什么涨/跌 — agent 问答端点。"""
 from __future__ import annotations
+from services.user_context import require_user_id
 import json as _json
 import os
 import re
 import base64
 import uuid
 from typing import List, Optional
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse, FileResponse, Response
 from pydantic import BaseModel
 
@@ -46,7 +47,7 @@ def _persist_images(meta: Optional[dict]) -> Optional[dict]:
                     continue
                 ext = _ALLOWED_IMG[subtype][0]
                 name = f"{uuid.uuid4().hex}.{ext}"
-                with get_runtime_paths().file("media", name).open("wb") as f:
+                with get_runtime_paths().file("media", f"{require_user_id()}/{name}").open("wb") as f:
                     f.write(base64.b64decode(b64))
                 out.append(f"/api/ask/image/{name}")
             except Exception:
@@ -193,11 +194,13 @@ async def cancel_run(run_id: str):
 async def save_message(m: SessionMsg):
     """保存一条对话消息。session_id 为空则新建会话(用 title/首问做标题), 返回 session_id。"""
     sid = m.session_id
+    if sid and not await get_ask_session(sid, user_id=require_user_id()):
+        raise HTTPException(404, '会话不存在')
     if not sid:
-        sid = await create_ask_session((m.title or m.content)[:80])
+        sid = await create_ask_session((m.title or m.content)[:80], user_id=require_user_id())
     meta_obj = _persist_images(m.meta)   # base64 落盘 → URL, DB 不存 base64
     meta = _json.dumps(meta_obj, ensure_ascii=False) if meta_obj else ""
-    await add_ask_message(sid, m.role, m.content, meta)
+    await add_ask_message(sid, m.role, m.content, meta, user_id=require_user_id())
     return {"session_id": sid}
 
 
@@ -210,7 +213,7 @@ async def get_ask_image(name: str):
     safe = os.path.basename(name)
     ext = safe.rsplit(".", 1)[-1].lower() if "." in safe else ""
     ct = _EXT_CT.get(ext)
-    path = get_runtime_paths().validate(get_runtime_paths().media / safe)
+    path = get_runtime_paths().validate(get_runtime_paths().media / str(require_user_id()) / safe)
     if not ct or not os.path.isfile(path):    # 只服务白名单光栅图
         return Response(status_code=404)
     return FileResponse(path, media_type=ct, headers={"X-Content-Type-Options": "nosniff"})
@@ -219,13 +222,13 @@ async def get_ask_image(name: str):
 @router.get("/sessions")
 async def get_sessions():
     """会话列表(最近在前, 标题+时间+消息数)。"""
-    return {"sessions": await list_ask_sessions()}
+    return {"sessions": await list_ask_sessions(user_id=require_user_id())}
 
 
 @router.get("/sessions/{session_id}")
 async def get_session(session_id: int):
     """单个会话全部消息(meta 解析回 dict)。"""
-    s = await get_ask_session(session_id)
+    s = await get_ask_session(session_id, user_id=require_user_id())
     if not s:
         return {"error": "会话不存在"}
     for msg in s.get("messages", []):
@@ -238,5 +241,5 @@ async def get_session(session_id: int):
 
 @router.delete("/sessions/{session_id}")
 async def remove_session(session_id: int):
-    await delete_ask_session(session_id)
+    await delete_ask_session(session_id, user_id=require_user_id())
     return {"ok": True}

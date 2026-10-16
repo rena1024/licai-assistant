@@ -7,6 +7,7 @@ Format: JSON {api_key, secret_key, passphrase}.
 永不添加下单/划转/交易执行类接口 —— 这是本项目的合规边界, 不是待办。
 """
 from __future__ import annotations
+from services.user_context import require_user_id
 import asyncio
 import base64
 import hashlib
@@ -48,60 +49,22 @@ def _login_keychain() -> str | None:
 
 
 def save_credentials(api_key: str, secret_key: str, passphrase: str) -> tuple[bool, str]:
-    """Returns (ok, error_detail)."""
-    blob = json.dumps({"api_key": api_key, "secret_key": secret_key, "passphrase": passphrase})
-    kc = _login_keychain()
-    args = ["security", "add-generic-password",
-            "-s", KEYCHAIN_SERVICE,
-            "-a", KEYCHAIN_ACCOUNT,
-            "-w", blob,
-            "-U"]
-    if kc:
-        args.append(kc)
-    try:
-        # Delete any existing entry first
-        subprocess.run(
-            ["security", "delete-generic-password", "-s", KEYCHAIN_SERVICE, "-a", KEYCHAIN_ACCOUNT]
-            + ([kc] if kc else []),
-            capture_output=True, timeout=5,
-        )
-        r = subprocess.run(args, capture_output=True, text=True, timeout=10)
-        if r.returncode != 0:
-            return False, (r.stderr or r.stdout or f"rc={r.returncode}").strip()
-        # Immediately verify the item is readable
-        verify = load_credentials()
-        if not verify:
-            return False, "add 成功但立即读取不到（Keychain 被锁？）"
-        return True, ""
-    except Exception as e:
-        return False, str(e)
+    from services import private_connections
+    private_connections.save('okx', {'api_key': api_key, 'secret_key': secret_key, 'passphrase': passphrase})
+    _bot_details_cache.clear()
+    return True, ''
 
 
 def load_credentials() -> Optional[dict]:
-    """Return {api_key, secret_key, passphrase} or None."""
-    kc = _login_keychain()
-    args = ["security", "find-generic-password", "-s", KEYCHAIN_SERVICE, "-a", KEYCHAIN_ACCOUNT, "-w"]
-    if kc:
-        args.append(kc)
-    try:
-        r = subprocess.run(args, capture_output=True, text=True, timeout=5)
-        if r.returncode != 0:
-            return None
-        return json.loads(r.stdout.strip())
-    except Exception:
-        return None
+    from services import private_connections
+    return private_connections.get('okx')
 
 
 def clear_credentials() -> bool:
-    kc = _login_keychain()
-    args = ["security", "delete-generic-password", "-s", KEYCHAIN_SERVICE, "-a", KEYCHAIN_ACCOUNT]
-    if kc:
-        args.append(kc)
-    try:
-        r = subprocess.run(args, capture_output=True, timeout=5)
-        return r.returncode == 0
-    except Exception:
-        return False
+    from services import private_connections
+    private_connections.save('okx', None)
+    _bot_details_cache.clear()
+    return True
 
 
 def has_credentials() -> bool:
@@ -124,6 +87,8 @@ def _timestamp() -> str:
 
 def _authed_get(path: str, params: dict | None = None) -> dict | None:
     """Execute a signed GET request. `path` should start with /api/v5/..."""
+    from services.task_context import ensure_active_sync
+    ensure_active_sync()
     creds = load_credentials()
     if not creds:
         return {"error": "credentials not configured"}
@@ -357,7 +322,7 @@ _BOT_DETAILS_TTL = 15  # seconds — enough freshness for crypto, avoids OKX rat
 async def get_bot_details(algo_id: str, algo_ord_type: str = "grid") -> dict | None:
     """Fetch one specific bot's live status. Routes to grid or DCA endpoint. Cached 15s."""
     import time as _time
-    key = f"{algo_ord_type}:{algo_id}"
+    key = (require_user_id(), f"{algo_ord_type}:{algo_id}")
     cached = _bot_details_cache.get(key)
     if cached and _time.time() - cached[1] < _BOT_DETAILS_TTL:
         return cached[0]

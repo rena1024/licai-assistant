@@ -307,12 +307,12 @@ async def _my_price_volume(bare: str) -> list[dict]:
         if is_etf:
             cur = await db.execute(
                 "select ea.unit_price, ea.action_type, ea.shares from external_asset_actions ea "
-                "join external_assets a on a.id = ea.asset_id where a.code=? "
-                "and ea.action_type in ('BUY','ADD','REDEEM','SELL')", (bare,))
+                "join external_assets a on a.id = ea.asset_id where a.code=? and a.user_id=? and ea.user_id=a.user_id "
+                "and ea.action_type in ('BUY','ADD','REDEEM','SELL')", (bare, require_user_id()))
         else:
             cur = await db.execute(
-                "select price, action_type, shares from position_actions where stock_code=? "
-                "and action_type in ('BUY','ADD','REDEEM','SELL')", (bare,))
+                "select price, action_type, shares from position_actions where stock_code=? and user_id=? "
+                "and action_type in ('BUY','ADD','REDEEM','SELL')", (bare, require_user_id()))
         for price, act, shares in await cur.fetchall():
             if not price or not shares:
                 continue
@@ -1134,7 +1134,7 @@ async def market_sentiment():
     """爱在冰川式市场情绪温度计: 涨停家数/连板高度/炸板率/赚钱效应。
     纯客观情绪指标, 不构成买卖建议。看市场是高潮还是退潮的宏观参考。5min 缓存。"""
     import asyncio
-    c = _senti_cache.get("s")
+    c = _senti_cache.get(require_user_id())
     if c and _time.time() - c[1] < _SENTI_TTL:
         return c[0]
     r = await asyncio.to_thread(_fetch_sentiment_sync)
@@ -1157,7 +1157,7 @@ async def market_sentiment():
         k = await gateway.try_call("sentiment", iso or None)
         if k:
             r["provider_sentiment"] = k
-        _senti_cache["s"] = (r, _time.time())
+        _senti_cache[require_user_id()] = (r, _time.time())
         return r
     return {"date": None, "mood": "数据不足", "n_zt": 0}
 

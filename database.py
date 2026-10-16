@@ -11,6 +11,7 @@ from services.runtime_paths import database_path, get_runtime_paths, LAYOUT_VERS
 DEFAULT_WATCH_GROUP = "自选"
 ACCOUNT_SCHEMA_VERSION = "1"
 PORTFOLIO_SCHEMA_VERSION = "1"
+OWNED_ASK_TABLES = ('ask_session', 'ask_message', 'ask_run', 'tool_gap', 'prompt_rule')
 OWNED_SETTINGS_TABLES = ('alert_config', 'custom_alerts', 'unwind_plans', 'unwind_tranches', 'watchlist', 'watchlist_group', 'cashflow_monthly', 'position_thesis', 'thesis_revision', 'brokers')
 OWNED_PORTFOLIO_TABLES = ("external_asset_actions", "position_actions", "trade_log", "external_assets", "holdings", "portfolio_snapshots", "morning_briefings")
 # 首次启动自动插入的模板不是用户配置；初始化保护据此识别被修改的无归属费率。
@@ -390,19 +391,23 @@ CREATE TABLE IF NOT EXISTS thesis_revision (
 CREATE INDEX IF NOT EXISTS idx_thesis_rev_code ON thesis_revision(code, rev);
 
 CREATE TABLE IF NOT EXISTS ask_session (
+    user_id INTEGER NOT NULL REFERENCES users(id),
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     title TEXT DEFAULT '',                    -- 用首个问题做标题
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(user_id,id)
 );
 
 CREATE TABLE IF NOT EXISTS ask_message (
+    user_id INTEGER NOT NULL REFERENCES users(id),
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     session_id INTEGER NOT NULL,
     role TEXT NOT NULL,                        -- user | assistant
     content TEXT NOT NULL,
     meta TEXT DEFAULT '',                      -- JSON: {tools_used, sources}
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY(user_id,session_id) REFERENCES ask_session(user_id,id)
 );
 CREATE INDEX IF NOT EXISTS idx_ask_message_session ON ask_message(session_id, id);
 
@@ -412,6 +417,7 @@ CREATE INDEX IF NOT EXISTS idx_ask_message_session ON ask_message(session_id, id
 -- 界面上是一行永远转不完的"分析中", 而且连它已经查过什么都看不到。落了盘之后, 重启后
 -- 那一轮会被标成 interrupted, 已经跑出来的步骤还在, 至少知道它走到哪一步。
 CREATE TABLE IF NOT EXISTS ask_run (
+    user_id INTEGER NOT NULL REFERENCES users(id),
     run_id TEXT PRIMARY KEY,
     session_id INTEGER,
     scope TEXT DEFAULT '',                     -- market | stock:<code>
@@ -420,7 +426,8 @@ CREATE TABLE IF NOT EXISTS ask_run (
     answered INTEGER DEFAULT 0,
     events TEXT DEFAULT '[]',                  -- JSON 数组, 下标即游标
     started_at REAL,
-    updated_at REAL
+    updated_at REAL,
+    FOREIGN KEY(user_id,session_id) REFERENCES ask_session(user_id,id)
 );
 CREATE INDEX IF NOT EXISTS idx_ask_run_started ON ask_run(started_at DESC);
 
@@ -430,6 +437,7 @@ CREATE INDEX IF NOT EXISTS idx_ask_run_started ON ask_run(started_at DESC);
 -- 另一次是美股行情把 开/高/低 全返 0(源里其实有)。这类"看着成功其实没数"的情况
 -- 不记账就永远只能等用户发现。按 (工具, 缺口类型, 市场) 聚合计数, 不存每次调用。
 CREATE TABLE IF NOT EXISTS tool_gap (
+    user_id INTEGER NOT NULL REFERENCES users(id),
     tool TEXT NOT NULL,
     kind TEXT NOT NULL,                        -- error | empty | stale | zero_fields
     market TEXT NOT NULL DEFAULT '',           -- A | HK | US | '' (与标的无关的工具)
@@ -438,7 +446,7 @@ CREATE TABLE IF NOT EXISTS tool_gap (
     sample TEXT DEFAULT '',                    -- 最近一次的入参样本
     first_seen TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     last_seen TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    PRIMARY KEY (tool, kind, market)
+    PRIMARY KEY (user_id, tool, kind, market)
 );
 
 -- 从"用户纠正"沉淀出来的候选规则, 人批准后才进 system prompt。
@@ -446,6 +454,7 @@ CREATE TABLE IF NOT EXISTS tool_gap (
 -- 对单个词都敏感(曾因词表缺"主题/标题"两个词让模型吞掉首句)。所以只自动"提案", 不自动
 -- 生效; status=pending 的一律不进 prompt。
 CREATE TABLE IF NOT EXISTS prompt_rule (
+    user_id INTEGER NOT NULL REFERENCES users(id),
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     title TEXT NOT NULL,                       -- 【】里的标题
     body TEXT NOT NULL,                        -- 规则正文(正向陈述)
@@ -521,7 +530,7 @@ async def get_db() -> aiosqlite.Connection:
 async def _portfolio_upgrade_tables(db) -> list[str]:
     """只升级空的旧业务表；账号信息保持原样，不猜测历史业务 owner。"""
     old = []
-    for table in OWNED_PORTFOLIO_TABLES + OWNED_SETTINGS_TABLES:
+    for table in OWNED_PORTFOLIO_TABLES + OWNED_SETTINGS_TABLES + OWNED_ASK_TABLES:
         columns = await (await db.execute(f'PRAGMA table_info("{table}")')).fetchall()
         if columns and 'user_id' not in {row['name'] for row in columns}:
             if table == 'brokers':
@@ -559,6 +568,15 @@ async def init_db():
         await db.execute("INSERT OR IGNORE INTO runtime_metadata VALUES ('layout_version', ?)", (LAYOUT_VERSION,))
         await db.execute("INSERT OR IGNORE INTO runtime_metadata VALUES ('account_schema_version', ?)", (ACCOUNT_SCHEMA_VERSION,))
         await db.execute("INSERT OR IGNORE INTO runtime_metadata VALUES ('portfolio_schema_version', ?)", (PORTFOLIO_SCHEMA_VERSION,))
+        for key in ('settings_schema_version','ask_schema_version'):
+            version = await (await db.execute('SELECT value FROM runtime_metadata WHERE key=?',(key,))).fetchone()
+            if version and version[0] != '1':
+                raise RuntimePathError('私人业务数据库版本不兼容')
+            if key == 'settings_schema_version' and not version:
+                users = await (await db.execute('SELECT id FROM users')).fetchall()
+                for user in users:
+                    await db.executemany('INSERT OR IGNORE INTO brokers(user_id,name,stock_rate,stock_min,etf_rate,etf_min,is_default) VALUES (?,?,?,?,?,?,?)',[(user['id'],*row) for row in DEFAULT_BROKERS])
+            await db.execute('INSERT OR IGNORE INTO runtime_metadata(key,value) VALUES (?,?)',(key,'1'))
         # Migration: add trade_date to position_actions if missing
         cursor = await db.execute('PRAGMA table_info(position_actions)')
         cols = {row[1] for row in await cursor.fetchall()}
@@ -829,45 +847,44 @@ async def get_cached_amounts(codes: list[str], since: str) -> dict[str, dict[str
 
 # ---- agent 执行流水(ask_run) ----
 
-async def save_ask_run(run_id: str, session_id: int, scope: str, question: str, started_at: float):
+async def save_ask_run(run_id: str, session_id: int, scope: str, question: str, started_at: float, *, user_id: int):
+    validate_user_id(user_id)
     db = await get_db()
     try:
-        await db.execute(
-            "INSERT OR REPLACE INTO ask_run (run_id, session_id, scope, question, status, events, "
-            "started_at, updated_at) VALUES (?, ?, ?, ?, 'running', '[]', ?, ?)",
-            (run_id, session_id, scope, question, started_at, started_at))
+        if not await (await db.execute('SELECT 1 FROM ask_session WHERE id=? AND user_id=?', (session_id,user_id))).fetchone():
+            raise ValueError('会话不存在或不属于当前账号')
+        await db.execute("INSERT INTO ask_run (user_id, run_id, session_id, scope, question, status, events, started_at, updated_at) VALUES (?, ?, ?, ?, ?, 'running', '[]', ?, ?)", (user_id, run_id, session_id, scope, question, started_at, started_at))
         await db.commit()
     finally:
         await db.close()
 
 
-async def update_ask_run(run_id: str, events_json: str, status: str, answered: bool, now: float):
+async def update_ask_run(run_id: str, events_json: str, status: str, answered: bool, now: float, *, user_id: int):
+    validate_user_id(user_id)
     db = await get_db()
     try:
-        await db.execute(
-            "UPDATE ask_run SET events = ?, status = ?, answered = ?, updated_at = ? WHERE run_id = ?",
-            (events_json, status, 1 if answered else 0, now, run_id))
+        await db.execute('UPDATE ask_run SET events = ?, status = ?, answered = ?, updated_at = ? WHERE user_id = ? AND run_id = ?', (events_json, status, 1 if answered else 0, now, user_id, run_id))
         await db.commit()
     finally:
         await db.close()
 
 
-async def get_ask_run(run_id: str) -> dict | None:
+async def get_ask_run(run_id: str, *, user_id: int) -> dict | None:
+    validate_user_id(user_id)
     db = await get_db()
     try:
-        cur = await db.execute('SELECT * FROM ask_run WHERE run_id = ?', (run_id,))
+        cur = await db.execute('SELECT * FROM ask_run WHERE user_id = ? AND run_id = ?', (user_id, run_id))
         r = await cur.fetchone()
         return dict(r) if r else None
     finally:
         await db.close()
 
 
-async def list_ask_runs(limit: int = 20) -> list[dict]:
+async def list_ask_runs(limit: int=20, *, user_id: int) -> list[dict]:
+    validate_user_id(user_id)
     db = await get_db()
     try:
-        cur = await db.execute(
-            "SELECT run_id, session_id, scope, question, status, answered, started_at, updated_at "
-            "FROM ask_run ORDER BY started_at DESC LIMIT ?", (limit,))
+        cur = await db.execute('SELECT run_id, session_id, scope, question, status, answered, started_at, updated_at FROM ask_run WHERE user_id = ? ORDER BY started_at DESC LIMIT ?', (user_id, limit))
         return [dict(r) for r in await cur.fetchall()]
     finally:
         await db.close()
@@ -888,13 +905,12 @@ async def interrupt_running_ask_runs() -> int:
         await db.close()
 
 
-async def prune_ask_runs(keep: int = 200) -> None:
+async def prune_ask_runs(keep: int=200, *, user_id: int) -> None:
     """只留最近 keep 条流水(答案在 ask_message 里, 这张表是过程)。"""
+    validate_user_id(user_id)
     db = await get_db()
     try:
-        await db.execute(
-            "DELETE FROM ask_run WHERE run_id NOT IN "
-            "(SELECT run_id FROM ask_run ORDER BY started_at DESC LIMIT ?)", (keep,))
+        await db.execute('DELETE FROM ask_run WHERE user_id=? AND run_id NOT IN (SELECT run_id FROM ask_run WHERE user_id=? ORDER BY started_at DESC LIMIT ?)', (user_id, user_id, keep))
         await db.commit()
     finally:
         await db.close()
@@ -1019,7 +1035,7 @@ async def mark_alert_triggered(alert_id: int, *, user_id: int):
     validate_user_id(user_id)
     db = await get_db()
     try:
-        await db.execute('UPDATE custom_alerts SET triggered = 1 WHERE user_id = ? AND id = ?', (*(alert_id,)[:-1], user_id, *(alert_id,)[-1:]))
+        await db.execute('UPDATE custom_alerts SET triggered = 1 WHERE user_id = ? AND id = ?', (user_id, alert_id))
         await db.commit()
     finally:
         await db.close()
@@ -1038,7 +1054,7 @@ async def delete_custom_alert(alert_id: int, *, user_id: int):
 # --- App Config ---
 
 async def get_config(key: str, *, user_id: int | None = None) -> str | None:
-    if user_id is not None or key in PRIVATE_SETTING_KEYS:
+    if user_id is not None or key not in PUBLIC_SETTING_KEYS:
         from services.user_context import require_user_id
         return await get_user_setting(key, user_id=validate_user_id(user_id) if user_id is not None else require_user_id())
     db = await get_db()
@@ -1051,7 +1067,7 @@ async def get_config(key: str, *, user_id: int | None = None) -> str | None:
 
 
 async def set_config(key: str, value: str, *, user_id: int | None = None):
-    if user_id is not None or key in PRIVATE_SETTING_KEYS:
+    if user_id is not None or key not in PUBLIC_SETTING_KEYS:
         from services.user_context import require_user_id
         return await set_user_setting(key, value, user_id=validate_user_id(user_id) if user_id is not None else require_user_id())
     db = await get_db()
@@ -1138,63 +1154,63 @@ async def delete_thesis(code: str, *, user_id: int):
 
 # --- 问问市场 会话历史 CRUD ---
 
-async def create_ask_session(title: str = "") -> int:
+async def create_ask_session(title: str='', *, user_id: int) -> int:
+    validate_user_id(user_id)
     db = await get_db()
     try:
-        cur = await db.execute('INSERT INTO ask_session (title) VALUES (?)', (title[:80],))
+        cur = await db.execute('INSERT INTO ask_session (user_id, title) VALUES (?, ?)', (user_id, title[:80]))
         await db.commit()
         return cur.lastrowid
     finally:
         await db.close()
 
 
-async def add_ask_message(session_id: int, role: str, content: str, meta: str = "") -> None:
+async def add_ask_message(session_id: int, role: str, content: str, meta: str='', *, user_id: int) -> None:
+    validate_user_id(user_id)
     db = await get_db()
     try:
-        await db.execute(
-            "INSERT INTO ask_message (session_id, role, content, meta) VALUES (?, ?, ?, ?)",
-            (session_id, role, content, meta or ""))
-        await db.execute('UPDATE ask_session SET updated_at = CURRENT_TIMESTAMP WHERE id = ?', (session_id,))
+        if not await (await db.execute('SELECT 1 FROM ask_session WHERE id=? AND user_id=?', (session_id,user_id))).fetchone():
+            raise ValueError('会话不存在或不属于当前账号')
+        await db.execute('INSERT INTO ask_message (user_id, session_id, role, content, meta) VALUES (?, ?, ?, ?, ?)', (user_id, session_id, role, content, meta or ''))
+        await db.execute('UPDATE ask_session SET updated_at = CURRENT_TIMESTAMP WHERE user_id = ? AND id = ?', (user_id, session_id))
         await db.commit()
     finally:
         await db.close()
 
 
-async def list_ask_sessions(limit: int = 50) -> list[dict]:
+async def list_ask_sessions(limit: int=50, *, user_id: int) -> list[dict]:
+    validate_user_id(user_id)
     db = await get_db()
     try:
-        cur = await db.execute(
-            "SELECT s.id, s.title, s.created_at, s.updated_at, "
-            "(SELECT COUNT(*) FROM ask_message m WHERE m.session_id = s.id) AS msg_count "
-            "FROM ask_session s "
-            "WHERE EXISTS (SELECT 1 FROM ask_message m WHERE m.session_id = s.id) "
-            "ORDER BY s.updated_at DESC LIMIT ?", (limit,))
+        cur = await db.execute('SELECT s.id, s.title, s.created_at, s.updated_at, (SELECT COUNT(*) FROM ask_message m WHERE m.session_id = s.id) AS msg_count FROM ask_session s WHERE s.user_id=? AND EXISTS (SELECT 1 FROM ask_message m WHERE m.session_id = s.id AND m.user_id=s.user_id) ORDER BY s.updated_at DESC LIMIT ?', (user_id, limit))
         rows = await cur.fetchall()
         return [dict(r) for r in rows]
     finally:
         await db.close()
 
 
-async def get_ask_session(session_id: int) -> dict | None:
+async def get_ask_session(session_id: int, *, user_id: int) -> dict | None:
+    validate_user_id(user_id)
     db = await get_db()
     try:
-        cur = await db.execute('SELECT * FROM ask_session WHERE id = ?', (session_id,))
+        cur = await db.execute('SELECT * FROM ask_session WHERE user_id = ? AND id = ?', (user_id, session_id))
         s = await cur.fetchone()
         if not s:
             return None
-        cur = await db.execute(
-            "SELECT role, content, meta, created_at FROM ask_message WHERE session_id = ? ORDER BY id", (session_id,))
+        cur = await db.execute('SELECT role, content, meta, created_at FROM ask_message WHERE user_id = ? AND session_id = ? ORDER BY id', (user_id, session_id))
         msgs = [dict(r) for r in await cur.fetchall()]
-        return {**dict(s), "messages": msgs}
+        return {**dict(s), 'messages': msgs}
     finally:
         await db.close()
 
 
-async def delete_ask_session(session_id: int) -> None:
+async def delete_ask_session(session_id: int, *, user_id: int) -> None:
+    validate_user_id(user_id)
     db = await get_db()
     try:
-        await db.execute('DELETE FROM ask_message WHERE session_id = ?', (session_id,))
-        await db.execute('DELETE FROM ask_session WHERE id = ?', (session_id,))
+        await db.execute('DELETE FROM ask_message WHERE user_id = ? AND session_id = ?', (user_id, session_id))
+        await db.execute('DELETE FROM ask_run WHERE session_id=? AND user_id=?', (session_id,user_id))
+        await db.execute('DELETE FROM ask_session WHERE user_id = ? AND id = ?', (user_id, session_id))
         await db.commit()
     finally:
         await db.close()
@@ -1467,7 +1483,7 @@ async def clear_tranche_sold_back(tranche_id: int, *, user_id: int):
     validate_user_id(user_id)
     db = await get_db()
     try:
-        await db.execute('UPDATE unwind_tranches SET sold_back_price = NULL, sold_back_at = NULL WHERE user_id = ? AND id = ?', (*(tranche_id,)[:-1], user_id, *(tranche_id,)[-1:]))
+        await db.execute('UPDATE unwind_tranches SET sold_back_price = NULL, sold_back_at = NULL WHERE user_id = ? AND id = ?', (user_id, tranche_id))
         await db.commit()
     finally:
         await db.close()
@@ -2112,7 +2128,7 @@ async def reorder_watchlist(codes: list[str], scope: str='global', group: str | 
                     continue
                 await db.execute('INSERT INTO watchlist_group (user_id, stock_code, grp, group_order) VALUES (?, ?,?,?) ON CONFLICT(user_id, stock_code, grp) DO UPDATE SET group_order=excluded.group_order', (user_id, c, group, float(i)))
             else:
-                await db.execute('UPDATE watchlist SET sort_order=? WHERE user_id = ? AND stock_code=?', (*(float(i), c)[:-1], user_id, *(float(i), c)[-1:]))
+                await db.execute('UPDATE watchlist SET sort_order=? WHERE user_id = ? AND stock_code=?', (float(i), user_id, c))
         await db.commit()
     finally:
         await db.close()
@@ -2215,18 +2231,26 @@ async def save_limit_up_pool(rows: list[dict]) -> int:
         await db.close()
 
 
-async def get_limit_up_pool(day: str) -> list[dict]:
+async def get_limit_up_pool(day: str, *, user_id: int | None = None) -> list[dict]:
     db = await get_db()
     try:
         cur = await db.execute(
             f"SELECT {','.join(_LUP_COLS)} FROM limit_up_pool WHERE snap_date = ?"
             " ORDER BY seal_amount DESC", (day,))
-        return [dict(zip(_LUP_COLS, r)) for r in await cur.fetchall()]
+        rows = [dict(zip(_LUP_COLS, r)) for r in await cur.fetchall()]
+        if user_id is not None:
+            import json
+            private = json.loads(await get_user_setting(f'provider_pool:{day}',user_id=user_id) or '[]')
+            merged = {r['stock_code']:r for r in rows}
+            for row in private:
+                merged[row['stock_code']] = row
+            rows = list(merged.values())
+        return rows
     finally:
         await db.close()
 
 
-async def list_limit_up_days(limit: int = 60, end: str | None = None) -> list[dict]:
+async def list_limit_up_days(limit: int = 60, end: str | None = None, *, user_id: int | None = None) -> list[dict]:
     """逐日汇总: 只数 / 封单合计 / 最高连板。序列用, 不拉明细。"""
     db = await get_db()
     try:
@@ -2239,8 +2263,21 @@ async def list_limit_up_days(limit: int = 60, end: str | None = None) -> list[di
         sql += " GROUP BY snap_date ORDER BY snap_date DESC LIMIT ?"
         cur = await db.execute(sql, args + (limit,))
         rows = await cur.fetchall()
-        return [{"date": r[0], "n": r[1], "seal_sum": r[2] or 0, "max_lb": r[3]}
+        result = [{"date": r[0], "n": r[1], "seal_sum": r[2] or 0, "max_lb": r[3]}
                 for r in reversed(rows)]
+        if user_id is not None:
+            validate_user_id(user_id)
+            import json
+            private = await (await db.execute("SELECT key,value FROM user_settings WHERE user_id=? AND key LIKE 'provider_pool:%'", (user_id,))).fetchall()
+            merged = {r['date']:r for r in result}
+            for record in private:
+                day = record['key'].split(':',1)[1]
+                if end and day > end:
+                    continue
+                values = json.loads(record['value'])
+                merged[day] = {'date':day,'n':len(values),'seal_sum':sum(r.get('seal_amount') or 0 for r in values),'max_lb':max((r.get('lb_count') or 0 for r in values),default=0)}
+            result = sorted(merged.values(),key=lambda r:r['date'])[-limit:]
+        return result
     finally:
         await db.close()
 
@@ -2378,7 +2415,7 @@ async def limit_up_pool_coverage() -> dict:
         await db.close()
 
 
-PRIVATE_SETTING_KEYS = {'max_daily_loss', 'fee_schedules', 'cashflow_savings_rate_target'}
+PUBLIC_SETTING_KEYS = {'public_close_date','network_proxy','tdx_base_url','market_provider','watchlist_default_group_filled', 'llm_base_url','llm_api_key','llm_api_key_header','llm_api_key_prefix','llm_proxy','llm_proxy_url','llm_model_map'}
 
 
 async def get_user_setting(key: str, *, user_id: int) -> str | None:

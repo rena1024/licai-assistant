@@ -166,9 +166,9 @@ def test_media_and_cache_writes_use_runtime_directory(tmp_path, monkeypatch):
     monkeypatch.setenv("LICAI_DATA_DIR", str(tmp_path))
     monkeypatch.setattr(fund_nav_model, "_models", {"synthetic": {"value": 1}})
     url = chart_render.save_png(b"synthetic-chart")
-    assert (tmp_path / "media" / url.rsplit("/", 1)[-1]).read_bytes() == b"synthetic-chart"
+    assert (tmp_path / "media" / "1" / url.rsplit("/", 1)[-1]).read_bytes() == b"synthetic-chart"
     meta = _persist_images({"images": ["data:image/png;base64,dGVzdA=="]})
-    assert (tmp_path / "media" / meta["images"][0].rsplit("/", 1)[-1]).read_bytes() == b"test"
+    assert (tmp_path / "media" / "1" / meta["images"][0].rsplit("/", 1)[-1]).read_bytes() == b"test"
     fund_nav_model._save()
     assert (tmp_path / "cache" / "fund_nav_model.json").exists()
     market_data._fx_remember("USD", 7.1)

@@ -90,7 +90,7 @@ def test_bad_spec_falls_back_instead_of_crashing(monkeypatch, spec):
     monkeypatch.setenv("MARKET_PROVIDER", spec)
     p = asyncio.run(registry.get_provider())
     assert isinstance(p, NullProvider)
-    assert spec in registry.load_error()               # 但原因要留得住, 设置页要显示
+    assert "加载失败" in registry.load_error()               # 但原因要留得住, 设置页要显示
 
 
 class _NotAProvider:
@@ -175,7 +175,7 @@ def test_unknown_bare_name_names_what_is_installed(monkeypatch):
     _stub_eps(monkeypatch, [_FakeEP("demo", "tests.test_providers:_Demo")])
     monkeypatch.setenv("MARKET_PROVIDER", "dmeo")
     assert isinstance(asyncio.run(registry.get_provider()), NullProvider)
-    assert "demo" in registry.load_error()
+    assert registry.discover()[0]["name"] == "demo" and registry.load_error()
 
 
 def test_import_path_still_works_without_any_entry_point(monkeypatch):
@@ -225,8 +225,7 @@ def test_provider_exception_does_not_escape_to_the_route(monkeypatch):
 
         async def hot_themes(self):
             raise KeyError("provider 内部写错了")
-    monkeypatch.setattr(registry, "_cache", _Boom())
-    monkeypatch.setattr(registry, "_cache_spec", "")
+    monkeypatch.setattr(registry, "_instances", {1: ("", _Boom(), "")})
     r = asyncio.run(gateway.call("hot_themes"))
     assert "error" in r
 
@@ -247,8 +246,7 @@ def test_try_call_drops_empty_results(monkeypatch):
 
         async def hot_themes(self):
             return {}
-    monkeypatch.setattr(registry, "_cache", _Empty())
-    monkeypatch.setattr(registry, "_cache_spec", "")
+    monkeypatch.setattr(registry, "_instances", {1: ("", _Empty(), "")})
     assert asyncio.run(gateway.try_call("hot_themes")) is None
 
 

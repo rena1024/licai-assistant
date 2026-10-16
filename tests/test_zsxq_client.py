@@ -375,3 +375,12 @@ def test_file_fetch_respects_size_cap(post, monkeypatch):
     monkeypatch.setattr("requests.Session.get", lambda *a, **k: _Stream())
     r = z.fetch_file_text("123", "big.pdf")
     assert "上限" in r["error"]
+
+
+@pytest.fixture(autouse=True)
+def active_owner():
+    import asyncio
+    from database import init_db
+    from tests.account_helpers import seed_owner
+    asyncio.run(init_db())
+    asyncio.run(seed_owner())
