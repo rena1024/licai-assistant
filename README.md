@@ -25,7 +25,7 @@ SQLite 单文件存储，你随时可以拷走、删掉、备份
 
 ![主看板](docs/screenshots/01-dashboard.png)
 
-> 演示数据，运行 `python scripts/seed_demo.py --use` 一键重现。
+> 截图使用演示数据；当前账号开发分支暂停旧版整库演示脚本，手测请在独立空目录录入合成数据。
 
 <h2 id="功能地图">功能地图</h2>
 
@@ -108,18 +108,14 @@ python run.py
 `LICAI_DATA_DIR` 指定持久目录，详见[运行目录与隔离测试](docs/deployment/runtime-data.md)。
 发现项目根目录已有旧库时会停止初始化；保留旧库，显式指定新的空目录继续，不自动迁移或清空历史数据。
 首次打开页面可凭本机一次性凭据创建管理员，再登录使用；临时密码首次登录须修改。
-登录、会话及本机恢复见[账号使用说明](docs/deployment/accounts.md)。完整多用户业务隔离仍待 A04～A10 验收，当前开发分支尚不适合多人日常使用。
+登录、会话及本机恢复见[账号使用说明](docs/deployment/accounts.md)。持仓与其他资产归属已完成 A04，完整多用户业务隔离仍待 A05～A10 验收，当前开发分支尚不适合多人日常使用。
 
-### 演示模式（不录数据先看效果）
+### 演示数据与当前开发阶段
 
-```bash
-python scripts/seed_demo.py --use   # 备份你的 DB + 写入演示数据 (4 只 A股 + 11 笔外部资产)
-# 重启服务器, 看演示效果
-
-python scripts/seed_demo.py --restore   # 看完恢复真实 DB
-```
-
-也可以 `--peek` 只生成 `portfolio.demo.db` 不动当前 DB。
+旧版 `seed_demo.py` 的整库写入／恢复入口已暂停，避免覆盖账号及其他用户的数据。
+手动测试请指定独立的空 `LICAI_DATA_DIR`，初始化并登录测试账号后，通过页面录入合成持仓和资产。
+持仓归属、升级保护及当前功能边界见[资产归属说明](docs/deployment/portfolio-ownership.md)。
+个人后台任务暂待 A09／A10 接入用户分发；旧版整表导入暂待 A08，当前导出仅含本人持仓资产，不是完整备份。
 
 ### 可选：飞书通知
 
@@ -809,7 +805,7 @@ licai/
 安装步骤跟[快速启动](#快速启动)一样，开发时多两件事：
 
 ```bash
-python scripts/seed_demo.py --use   # 灌演示数据, 不用拿自己的真实持仓开发
+export LICAI_DATA_DIR="$PWD/runtime-dev"  # 使用独立空目录，登录后录入合成数据
 cd frontend && npm run build        # 改了 frontend/ 要重新构建(产物在 .gitignore 里, 不进仓)
 ```
 
