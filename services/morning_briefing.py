@@ -13,6 +13,7 @@ The briefing is meant to run ~9:00 CST before market open and persist the result
 for the rest of the day. User reads it once, no real-time noise.
 """
 from __future__ import annotations
+from services.user_context import require_user_id
 import asyncio
 import json
 import re
@@ -283,17 +284,17 @@ async def generate_all_briefings() -> list[dict]:
     from services.external_assets import _is_onchain_etf, fund_theme_word
     from services.external_ledger import compute_external_state
 
-    holdings = [h for h in await get_all_holdings()
+    holdings = [h for h in await get_all_holdings(user_id=require_user_id())
                 if (is_a_share(h["stock_code"]) or split_stock_code(h["stock_code"])[0] in ("HK", "US"))
                 and (h.get("shares") or 0) > 0]
     # 场内 ETF 持仓(双账本): 成本用摊薄口径(与券商一致), 主题词当行业拉板块新闻
     etfs = []
     try:
-        for x in await list_external_assets():
+        for x in await list_external_assets(user_id=require_user_id()):
             code = str(x.get("code") or "")
             if x.get("asset_type") != "FUND" or not _is_onchain_etf(code):
                 continue
-            st = compute_external_state(await list_external_actions(x["id"]), "FUND")
+            st = compute_external_state(await list_external_actions(x["id"], user_id=require_user_id()), "FUND")
             sh = float(st.get("shares") or 0)
             if sh <= 0:
                 continue
@@ -323,7 +324,7 @@ async def generate_all_briefings() -> list[dict]:
                 current_price=cur, quote=q,
             )
             briefing["briefing_date"] = today
-            await save_briefing(code, today, json.dumps(briefing, ensure_ascii=False))
+            await save_briefing(code, today, json.dumps(briefing, ensure_ascii=False), user_id=require_user_id())
             results.append(briefing)
         except Exception as e:
             print(f"[briefing] {code} failed: {e}")
@@ -339,7 +340,7 @@ async def generate_all_briefings() -> list[dict]:
                 current_price=cur, sector_hint=e["theme"])
             briefing["briefing_date"] = today
             briefing["asset_class"] = "etf"
-            await save_briefing(code, today, json.dumps(briefing, ensure_ascii=False))
+            await save_briefing(code, today, json.dumps(briefing, ensure_ascii=False), user_id=require_user_id())
             results.append(briefing)
         except Exception as ex:
             print(f"[briefing] etf {code} failed: {ex}")

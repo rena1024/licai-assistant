@@ -1,5 +1,6 @@
 """Portfolio news aggregation. 用 akshare 拉持仓个股的新闻 + 公告."""
 from __future__ import annotations
+from services.user_context import require_user_id
 import asyncio
 import hashlib
 import ipaddress
@@ -212,13 +213,13 @@ async def portfolio_news(limit_per_code: int = 5):
       { items: [{kind, code, name, title, time, ...}, ...], count: N }
     items 按 time 倒序, 跨持仓股合并.
     """
-    cache_key = f"portfolio_news_{limit_per_code}"
+    cache_key = (require_user_id(), f"portfolio_news_{limit_per_code}")
     cached = _cache.get(cache_key)
     if cached and time.time() - cached[1] < _TTL:
         return cached[0]
 
     # 只拉当前在持(shares>0)的票的新闻; 已清仓的不算"持仓新闻"
-    holdings = [h for h in await get_all_holdings() if float(h.get("shares") or 0) > 0]
+    holdings = [h for h in await get_all_holdings(user_id=require_user_id()) if float(h.get("shares") or 0) > 0]
     codes = [h["stock_code"] for h in holdings if _is_stock(h["stock_code"])]
     name_by_code = {h["stock_code"]: h.get("stock_name") or "" for h in holdings}
 
@@ -239,11 +240,10 @@ async def portfolio_news(limit_per_code: int = 5):
     for code, news_list in zip(codes, news_per_code):
         name = name_by_code.get(code, "")
         for n in news_list[:limit_per_code]:
-            n["name"] = name
-            items.append(n)
+            items.append({**n, "name": name})
         for notice in (notices_by_code.get(code, []))[:limit_per_code]:
             if not notice.get("name"):
-                notice["name"] = name
+                notice = {**notice, "name": name}
             items.append(notice)
 
     # 按 time 倒序
@@ -490,7 +490,7 @@ async def _portfolio_keywords() -> set:
     持仓不止 A股: ETF 用户的关联标记靠主题词命中。"""
     kws = set(_PORTFOLIO_SECTOR_KW)
     try:
-        for h in await get_all_holdings():
+        for h in await get_all_holdings(user_id=require_user_id()):
             if float(h.get("shares") or 0) > 0:
                 nm = (h.get("stock_name") or "").strip()
                 if len(nm) >= 2:
@@ -500,7 +500,7 @@ async def _portfolio_keywords() -> set:
     try:
         from database import list_external_assets
         from services.external_assets import fund_theme_word
-        for x in await list_external_assets():
+        for x in await list_external_assets(user_id=require_user_id()):
             if x.get("asset_type") == "FUND" and float(x.get("shares") or 0) > 0:
                 w = fund_theme_word(x.get("name") or "")
                 if w:
@@ -550,7 +550,7 @@ async def news_digest(force: bool = False, max_items: int = 80):
     """LLM 摘要: 把市场要闻 + 持仓相关新闻喂给 Claude, 生成结构化要点.
     30min 缓存; force=true 强制重算.
     """
-    cache_key = "news_digest"
+    cache_key = (require_user_id(), "news_digest")
     if not force:
         cached = _cache.get(cache_key)
         if cached and time.time() - cached[1] < _DIGEST_TTL:
@@ -672,7 +672,7 @@ async def daily_review(force: bool = False):
     输出 {summary, holdings[], sectors[], global[], tomorrow[]}。不给买卖建议。"""
     from datetime import date as _date
     today = _date.today().isoformat()
-    cache_key = f"daily_review_{today}"
+    cache_key = (require_user_id(), f"daily_review_{today}")
     if not force:
         c = _cache.get(cache_key)
         if c and time.time() - c[1] < _REVIEW_TTL:
@@ -683,7 +683,7 @@ async def daily_review(force: bool = False):
 
     # 1) 全组合今日表现: A股/港美股(holdings 表, 实时) + 基金/加密/机器人(external_assets,
     #    复用 assets 口径: 场内ETF实时价、场外基金净值或底层代理估、加密24h、机器人累计)
-    holdings = await get_all_holdings()
+    holdings = await get_all_holdings(user_id=require_user_id())
     live = [h for h in holdings if float(h.get("shares") or 0) > 0]
     quotes = await get_realtime_quotes([h["stock_code"] for h in live]) if live else {}
     a_codes = [h["stock_code"] for h in live if _is_a_share(h["stock_code"])]
@@ -1006,7 +1006,7 @@ async def _all_holdings_desc() -> str:
     try:
         from services.market_data import split_stock_code
         by_mkt: dict[str, list] = {}
-        for h in await get_all_holdings():
+        for h in await get_all_holdings(user_id=require_user_id()):
             if float(h.get("shares") or 0) > 0:
                 lab = {"HK": "港股", "US": "美股"}.get(split_stock_code(h["stock_code"])[0], "A股")
                 by_mkt.setdefault(lab, []).append(f"{h.get('stock_name','')}({h['stock_code']})")
@@ -1019,7 +1019,7 @@ async def _all_holdings_desc() -> str:
         from database import list_external_assets
         label = {"FUND": "基金/ETF", "CRYPTO": "加密", "BOT": "量化机器人", "WEALTH": "理财", "CASH": "现金"}
         byt: dict[str, list] = {}
-        for x in await list_external_assets():
+        for x in await list_external_assets(user_id=require_user_id()):
             t = x.get("asset_type")
             nm = (x.get("name") or "").strip()
             if not nm:
@@ -1076,7 +1076,7 @@ async def interpret_news(data: InterpretIn):
                 body_excerpt = full[:7000]         # 展示给前端的原文全文
         except Exception:
             pass
-    key = hashlib.sha1(f"{data.title}|{content}|{data.code or ''}|{data.url or ''}".encode("utf-8")).hexdigest()
+    key = hashlib.sha1(f"{require_user_id()}|{data.title}|{content}|{data.code or ''}|{data.url or ''}".encode("utf-8")).hexdigest()
     if key in _INTERPRET_CACHE:
         return {**_INTERPRET_CACHE[key], "cached": True}
     hold_desc = await _all_holdings_desc()

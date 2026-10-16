@@ -8,6 +8,7 @@
 数据 = 基金季报(滞后至上一季度末), 纯客观结构展示, 不构成任何买卖建议。
 """
 from __future__ import annotations
+from services.user_context import require_user_id
 import asyncio
 import time
 
@@ -320,7 +321,7 @@ async def my_etf_scan() -> dict:
     from database import list_external_assets
     from services.external_assets import _is_onchain_etf
     held = []
-    for x in await list_external_assets():
+    for x in await list_external_assets(user_id=require_user_id()):
         code = str(x.get("code") or "")
         if x.get("asset_type") == "FUND" and _is_onchain_etf(code) and float(x.get("shares") or 0) > 0:
             held.append((code, x.get("name") or code))

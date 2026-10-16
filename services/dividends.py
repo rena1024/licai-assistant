@@ -6,6 +6,7 @@
 失败一律返回 0(不破成本计算): 数据源抖动时退回未摊薄成本, 不会让持仓盈亏算崩。
 """
 from __future__ import annotations
+from services.user_context import require_user_id
 import asyncio
 import datetime as _dt
 import time as _t
@@ -376,7 +377,7 @@ def pending_for_code(code: str, actions: list, events: list[dict], today: str,
 async def dismissed_set() -> set:
     from database import get_config
     try:
-        return set(_json.loads(await get_config(DISMISS_KEY) or "[]"))
+        return set(_json.loads(await get_config(f"{DISMISS_KEY}:{require_user_id()}") or "[]"))
     except (ValueError, TypeError):
         return set()
 
@@ -385,14 +386,14 @@ async def dismiss(code: str, ex_date: str) -> None:
     from database import set_config
     s = await dismissed_set()
     s.add(f"{str(code).upper()}|{str(ex_date)[:10]}")
-    await set_config(DISMISS_KEY, _json.dumps(sorted(s)))
+    await set_config(f"{DISMISS_KEY}:{require_user_id()}", _json.dumps(sorted(s)))
 
 
 async def scan_pending(only_code: str | None = None) -> dict:
     """全部港美股持仓(含已清仓, 持有期内漏记的也算)的待确认分红。拉数据失败的票列进 errors。"""
     from database import get_all_holdings, get_position_actions
     dismissed = await dismissed_set()
-    codes = [h for h in await get_all_holdings()
+    codes = [h for h in await get_all_holdings(user_id=require_user_id())
              if str(h.get("stock_code") or "").upper().startswith(("HK.", "US."))]
     if only_code:
         codes = [h for h in codes if h["stock_code"].upper() == only_code.upper()]
@@ -400,7 +401,7 @@ async def scan_pending(only_code: str | None = None) -> dict:
 
     async def one(h):
         code = h["stock_code"]
-        actions = await get_position_actions(code, limit=500)
+        actions = await get_position_actions(code, limit=500, user_id=require_user_id())
         if not actions:
             return
         ev = await asyncio.to_thread(foreign_events_sync, code)

@@ -10,6 +10,7 @@
 只描述波动幅度, 不预测方向; 亏损是按市值估的金额, 不含申赎费与滑点。
 """
 from __future__ import annotations
+from services.user_context import require_user_id
 
 import asyncio
 import math
@@ -53,7 +54,7 @@ def _ewma_cov(R: np.ndarray, lam: float = LAMBDA) -> np.ndarray:
 
 
 async def build(force: bool = False) -> dict:
-    c = _cache.get("r")
+    c = _cache.get(require_user_id())
     if c and not force and time.time() - c[1] < _TTL:
         return c[0]
     from database import get_all_holdings
@@ -61,7 +62,7 @@ async def build(force: bool = False) -> dict:
     from api.assets_routes import list_assets
 
     pos, excluded = [], []
-    hs = [h for h in await get_all_holdings() if float(h.get("shares") or 0) > 0]
+    hs = [h for h in await get_all_holdings(user_id=require_user_id()) if float(h.get("shares") or 0) > 0]
     quotes = await get_realtime_quotes([h["stock_code"] for h in hs]) if hs else {}
     for h in hs:
         q = quotes.get(h["stock_code"]) or {}
@@ -128,5 +129,5 @@ async def build(force: bool = False) -> dict:
                 "回测: 固定今天的持仓, 过去每天只用此前数据估当天, 实际亏损超过估值的比例应在 5% 左右。"
                 "只描述波动幅度, 不预测方向。现金/理财按不波动计, 加密/网格机器人未纳入。",
     }
-    _cache["r"] = (out, time.time())
+    _cache[require_user_id()] = (out, time.time())
     return out

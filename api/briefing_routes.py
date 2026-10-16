@@ -1,5 +1,6 @@
 """Morning briefing endpoints."""
 from __future__ import annotations
+from services.user_context import require_user_id
 import json
 from datetime import datetime, timezone, timedelta
 from fastapi import APIRouter
@@ -17,7 +18,7 @@ def _today_cst() -> str:
 async def get_today_briefings():
     """Return today's stored briefings (or latest available date if today is empty)."""
     today = _today_cst()
-    rows = await get_briefings_for_date(today)
+    rows = await get_briefings_for_date(today, user_id=require_user_id())
     used_date = today
     if not rows:
         # Fall back to most recent date with any briefing — useful on weekends
@@ -25,22 +26,22 @@ async def get_today_briefings():
         db = await get_db()
         try:
             cursor = await db.execute(
-                "SELECT MAX(briefing_date) FROM morning_briefings"
+                "SELECT MAX(briefing_date) FROM morning_briefings WHERE user_id = ?", (require_user_id(),)
             )
             row = await cursor.fetchone()
             latest = row[0] if row else None
         finally:
             await db.close()
         if latest:
-            rows = await get_briefings_for_date(latest)
+            rows = await get_briefings_for_date(latest, user_id=require_user_id())
             used_date = latest
 
     # 用户清仓后, 历史日期的简报记录还在; 按当前在持过滤(双账本: A股 + 场内ETF)
     from database import get_all_holdings, list_external_assets
-    active_codes = {h["stock_code"] for h in await get_all_holdings() if (h.get("shares") or 0) > 0}
+    active_codes = {h["stock_code"] for h in await get_all_holdings(user_id=require_user_id()) if (h.get("shares") or 0) > 0}
     try:
         from services.external_assets import _is_onchain_etf
-        for x in await list_external_assets():
+        for x in await list_external_assets(user_id=require_user_id()):
             code = str(x.get("code") or "")
             if x.get("asset_type") == "FUND" and _is_onchain_etf(code) and float(x.get("shares") or 0) > 0:
                 active_codes.add(code)

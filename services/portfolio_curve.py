@@ -24,6 +24,7 @@ TWR 消除了出入金对收益率的干扰——中途加仓不会被当成"赚
 纯客观展示, 不构成任何买卖建议。
 """
 from __future__ import annotations
+from services.user_context import require_user_id
 
 import asyncio
 import time
@@ -361,7 +362,7 @@ def max_drawdown(series: list[float]) -> float:
 
 async def build_curve(days: int = 120) -> dict:
     days = max(20, min(int(days or 120), 500))
-    ck = f"curve_{days}"
+    ck = (require_user_id(), f"curve_{days}")
     c = _cache.get(ck)
     if c and time.time() - c[1] < _TTL:
         return c[0]
@@ -378,14 +379,14 @@ async def build_curve(days: int = 120) -> dict:
 
     # 资产清单: (kind, code, actions)
     tasks = []
-    a_codes = sorted({h.get("stock_code") for h in await get_all_holdings() if h.get("stock_code")})
+    a_codes = sorted({h.get("stock_code") for h in await get_all_holdings(user_id=require_user_id()) if h.get("stock_code")})
     for code in a_codes:
-        acts = await get_position_actions(code, limit=1000)
+        acts = await get_position_actions(code, limit=1000, user_id=require_user_id())
         for a in acts:
             a.setdefault("status", "confirmed")
         tasks.append(("stock", code, acts))
-    for x in await list_external_assets():
-        acts = await list_external_actions(x["id"])
+    for x in await list_external_assets(user_id=require_user_id()):
+        acts = await list_external_actions(x["id"], user_id=require_user_id())
         code = str(x.get("code") or "")
         at = (x.get("asset_type") or "").upper()
         if at == "FUND" and code:
@@ -575,7 +576,7 @@ async def correlation_matrix(days: int = 60) -> dict:
     日期对齐见 observed_dates / paired_returns: 美股按北京观测日, 休市差按累计收益配对。
     量化"同源风险": 名字不同的持仓若相关性>0.8, 涨跌基本是一回事。纯客观, 不构成建议。"""
     days = max(20, min(int(days or 60), 250))
-    ck = f"corr_{days}"
+    ck = (require_user_id(), f"corr_{days}")
     c = _cache.get(ck)
     if c and time.time() - c[1] < _TTL:
         return c[0]
@@ -589,7 +590,7 @@ async def correlation_matrix(days: int = 60) -> dict:
         code = str(h.get("stock_code") or "")
         if code:
             inst.append(("px", code, h.get("stock_name") or code))
-    for x in await list_external_assets():
+    for x in await list_external_assets(user_id=require_user_id()):
         if (x.get("asset_type") or "").upper() != "FUND":
             continue
         code = str(x.get("code") or "")

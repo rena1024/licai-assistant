@@ -183,17 +183,17 @@ async def lifespan(app: FastAPI):
         feishu_notify.set_muted(True)
     if url:
         print(f"飞书推送 {'静音中' if feishu_notify.is_muted() else '已启用'}")
-    task1 = asyncio.create_task(price_monitor_loop())
+    task1 = asyncio.create_task(_wait_for_owned_dispatch("持仓行情推送"))
     task2 = asyncio.create_task(backup_loop())
-    task3 = asyncio.create_task(briefing_loop())
-    task4 = asyncio.create_task(dca_loop())
+    task3 = asyncio.create_task(_wait_for_owned_dispatch("个人早盘简报"))
+    task4 = asyncio.create_task(_wait_for_owned_dispatch("个人定投自动任务"))
     task5 = asyncio.create_task(news_prewarm_loop())
     task6 = asyncio.create_task(sector_matrix_prewarm_loop())
     task7 = asyncio.create_task(coiled_prewarm_loop())
-    task8 = asyncio.create_task(curve_prewarm_loop())
-    task9 = asyncio.create_task(eod_summary_loop())
+    task8 = asyncio.create_task(_wait_for_owned_dispatch("组合预热与快照"))
+    task9 = asyncio.create_task(_wait_for_owned_dispatch("个人收盘推送"))
     task10 = asyncio.create_task(_symbol_dict_prewarm())
-    task11 = asyncio.create_task(rule_mine_loop())
+    task11 = asyncio.create_task(_wait_for_owned_dispatch("个人问答规则挖掘"))
     print(f"理财助手已启动: http://localhost:{config.port}")
     yield
     task1.cancel()
@@ -207,6 +207,12 @@ async def lifespan(app: FastAPI):
     task9.cancel()
     task10.cancel()
     task11.cancel()
+
+
+async def _wait_for_owned_dispatch(name: str):
+    """A09/A10 接入 owner 调度前，不能把整个业务库当作一个匿名用户执行。"""
+    print(f"[identity] {name} 暂停：等待用户级后台调度（A09/A10）")
+    await asyncio.Event().wait()
 
 
 app = FastAPI(title="理财助手", lifespan=lifespan)

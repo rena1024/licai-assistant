@@ -1,5 +1,6 @@
 """Market data REST endpoints."""
 from __future__ import annotations
+from services.user_context import require_user_id
 import asyncio
 import json as _json
 import time as _time
@@ -1179,7 +1180,7 @@ async def sentiment_ai(force: bool = False):
 
     # 用 数据日期 + 小时 做 key, 盘中随小时滚动刷新
     ck = f"{s.get('date')}-{datetime.now(timezone.utc).hour}"
-    c = _senti_ai_cache.get("c")
+    c = _senti_ai_cache.get(require_user_id())
     if not force and c and c[1] == ck:
         return c[0]
 
@@ -1196,7 +1197,7 @@ async def sentiment_ai(force: bool = False):
     # 持仓所在 A 股板块(二级), 让 AI 点出持仓跟今日热点的关系
     from services.market_data import get_stock_sector_detail, is_a_share
     from database import get_all_holdings
-    held = [h for h in await get_all_holdings() if is_a_share(h["stock_code"]) and float(h.get("shares") or 0) > 0]
+    held = [h for h in await get_all_holdings(user_id=require_user_id()) if is_a_share(h["stock_code"]) and float(h.get("shares") or 0) > 0]
     held_secs = set()
     for h in held:
         try:
@@ -1210,7 +1211,7 @@ async def sentiment_ai(force: bool = False):
     try:
         from database import list_external_assets
         from services.external_assets import fund_theme_word, _is_onchain_etf
-        for x in await list_external_assets():
+        for x in await list_external_assets(user_id=require_user_id()):
             if x.get("asset_type") == "FUND" and float(x.get("shares") or 0) > 0 \
                     and _is_onchain_etf(str(x.get("code") or "")):
                 w = fund_theme_word(x.get("name") or "")
@@ -1279,7 +1280,7 @@ async def sentiment_ai(force: bool = False):
     }
     # 只有真拿到内容才缓存; LLM/代理抖动(call_claude 可能返回错误串而非抛异常)不污染整小时缓存
     if result["summary"]:
-        _senti_ai_cache["c"] = (result, ck)
+        _senti_ai_cache[require_user_id()] = (result, ck)
     return result
 
 
@@ -1375,7 +1376,8 @@ async def hot_rank(top: int = 20):
 
     from database import get_all_holdings
     # 只标当前在持(shares>0); 已清仓的票不算"我的持仓"
-    held_codes = {h["stock_code"] for h in await get_all_holdings() if float(h.get("shares") or 0) > 0}
+    held_codes = {h["stock_code"] for h in await get_all_holdings(user_id=require_user_id()) if float(h.get("shares") or 0) > 0}
+    rows = [dict(row) for row in rows]
     for r in rows:
         r["mine"] = r["code"] in held_codes
     mine = [r for r in rows if r["mine"]]

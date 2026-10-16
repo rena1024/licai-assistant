@@ -1,4 +1,5 @@
 """Tests for unwind-related DB operations."""
+from services.user_context import require_user_id
 import asyncio
 import os
 import tempfile
@@ -14,6 +15,8 @@ def temp_db(monkeypatch):
     # Reset cached module state if any
     from database import init_db
     asyncio.run(init_db())
+    from tests.portfolio_fixtures import seed_business_owner
+    seed_business_owner(path)
     yield path
     os.unlink(path)
 
@@ -63,9 +66,9 @@ def test_mark_tranche_executed(temp_db):
 def test_position_action_log(temp_db):
     from database import log_position_action, get_position_actions
 
-    asyncio.run(log_position_action("601212", "ADD", price=7.82, shares=200, tranche_id=1))
-    asyncio.run(log_position_action("601212", "T_BUY", price=8.04, shares=100))
+    asyncio.run(log_position_action("601212", "ADD", price=7.82, shares=200, tranche_id=1, user_id=require_user_id()))
+    asyncio.run(log_position_action("601212", "T_BUY", price=8.04, shares=100, user_id=require_user_id()))
 
-    actions = asyncio.run(get_position_actions("601212"))
+    actions = asyncio.run(get_position_actions("601212", user_id=require_user_id()))
     assert len(actions) == 2
     assert actions[0]["action_type"] in ("ADD", "T_BUY")

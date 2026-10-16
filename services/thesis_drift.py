@@ -22,6 +22,7 @@ JSON 直接摆出来, 让人自己看见。
 不给"逻辑还成不成立"的结论, 不打分, 不提示买卖。漂移是**行为**事实, 不是估值结论。
 """
 from __future__ import annotations
+from services.user_context import require_user_id
 
 import asyncio
 import datetime as _dt
@@ -107,8 +108,8 @@ async def _cost_of(code: str) -> float | None:
     try:
         from database import get_holding, get_position_actions
         from services.position_ledger import ledger_state
-        h = await get_holding(code)
-        acts = await get_position_actions(code, limit=500)
+        h = await get_holding(code, user_id=require_user_id())
+        acts = await get_position_actions(code, limit=500, user_id=require_user_id())
         if not acts:
             return None
         st = await ledger_state(code, acts, (h or {}).get("broker"))

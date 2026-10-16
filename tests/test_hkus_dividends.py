@@ -1,4 +1,5 @@
 """港美股现金分红识别: 方案解析、拆股还原、除净前持股、去重、建议与一键记入(网络全 mock)。"""
+from services.user_context import require_user_id
 import asyncio
 
 import pytest
@@ -141,14 +142,16 @@ def fresh_db(monkeypatch, tmp_path):
     import database as db
     monkeypatch.setattr("config.config.db_path", str(tmp_path / "t.db"))
     asyncio.run(db.init_db())
+    from tests.portfolio_fixtures import seed_business_owner
+    seed_business_owner(db.config.db_path)
     return db
 
 
 def test_confirm_writes_dividend_once(fresh_db, monkeypatch):
     db = fresh_db
     import api.portfolio_routes as pr
-    asyncio.run(db.add_holding("US.AAPL", "Apple", 0, 0))
-    asyncio.run(db.add_position_action("US.AAPL", "BUY", 200.0, 10, trade_date="2026-01-05", fx_rate=7.1))
+    asyncio.run(db.add_holding("US.AAPL", "Apple", 0, 0, user_id=require_user_id()))
+    asyncio.run(db.add_position_action("US.AAPL", "BUY", 200.0, 10, trade_date="2026-01-05", fx_rate=7.1, user_id=require_user_id()))
     monkeypatch.setattr(dv, "foreign_events_sync", lambda c: [
         {"ex_date": "2026-08-10", "pay_date": "2026-08-13", "per_share": 0.27, "currency": "USD",
          "declared": "$0.27", "source": "nasdaq"}])
@@ -161,7 +164,7 @@ def test_confirm_writes_dividend_once(fresh_db, monkeypatch):
     got = asyncio.run(pr.pending_dividends())
     assert [(x["stock_code"], x["shares"], x["gross"]) for x in got["items"]] == [("US.AAPL", 10, 2.7)]
     asyncio.run(pr.confirm_dividend("US.AAPL", pr.DividendConfirm(ex_date="2026-08-10")))
-    rows = [r for r in asyncio.run(db.get_position_actions("US.AAPL")) if r["action_type"] == "DIVIDEND"]
+    rows = [r for r in asyncio.run(db.get_position_actions("US.AAPL", user_id=require_user_id())) if r["action_type"] == "DIVIDEND"]
     assert len(rows) == 1
     r = rows[0]
     assert (r["price"], r["shares"], r["trade_date"], r["fx_rate"], r["fee"]) == (0.27, 10, "2026-08-13", 7.12, None)
@@ -173,8 +176,8 @@ def test_confirm_writes_dividend_once(fresh_db, monkeypatch):
 def test_dismiss_persists(fresh_db, monkeypatch):
     db = fresh_db
     import api.portfolio_routes as pr
-    asyncio.run(db.add_holding("HK.00700", "腾讯控股", 0, 0))
-    asyncio.run(db.add_position_action("HK.00700", "BUY", 400.0, 100, trade_date="2026-03-02"))
+    asyncio.run(db.add_holding("HK.00700", "腾讯控股", 0, 0, user_id=require_user_id()))
+    asyncio.run(db.add_position_action("HK.00700", "BUY", 400.0, 100, trade_date="2026-03-02", user_id=require_user_id()))
     monkeypatch.setattr(dv, "foreign_events_sync", lambda c: [_hk_ev("2026-05-15", "2026-06-01", 5.3)])
     monkeypatch.setattr(dv, "market_today", lambda c: "2026-10-09")
     assert len(asyncio.run(pr.pending_dividends())["items"]) == 1

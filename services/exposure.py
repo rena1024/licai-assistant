@@ -22,6 +22,7 @@
     列进 uncovered, 不是"敞口为 0"
 """
 from __future__ import annotations
+from services.user_context import require_user_id
 
 import asyncio
 import re
@@ -86,7 +87,7 @@ async def _positions_now() -> tuple[list, list, float, dict]:
 
     stocks: list[dict] = []
     try:
-        hs = [h for h in await get_all_holdings() if (h.get("shares") or 0) > 0]
+        hs = [h for h in await get_all_holdings(user_id=require_user_id()) if (h.get("shares") or 0) > 0]
     except Exception:
         hs = []
     if hs:
@@ -130,7 +131,7 @@ async def _positions_as_of(day: str) -> tuple[list, list, float, dict]:
                           list_external_assets, get_holding)
     from services.position_ledger import compute_position_state
 
-    acts = await get_position_actions_until(day)
+    acts = await get_position_actions_until(day, user_id=require_user_id())
     codes = list(acts)
     closes = await get_cached_closes(codes, day) if codes else {}
     stocks, missing_px = [], []
@@ -147,7 +148,7 @@ async def _positions_as_of(day: str) -> tuple[list, list, float, dict]:
             missing_px.append(code)
             continue
         try:                       # 名字优先取本地持仓表(回看时不为了个名字去打网络)
-            nm = ((await get_holding(code)) or {}).get("stock_name") or code
+            nm = ((await get_holding(code, user_id=require_user_id())) or {}).get("stock_name") or code
         except Exception:
             nm = code
         from services.market_data import code_fx, code_fx_on, split_stock_code
@@ -155,7 +156,7 @@ async def _positions_as_of(day: str) -> tuple[list, list, float, dict]:
         fx = ((await asyncio.to_thread(code_fx_on, code, day)) or await asyncio.to_thread(code_fx, code)) if mkt in ("HK", "US") else 1.0   # 回看按当天的历史汇率
         stocks.append({"code": code, "name": nm, "market": "CN" if mkt == "A" else mkt, "mv": sh * px * fx})
 
-    snap = await get_snapshot_on_or_before(day)
+    snap = await get_snapshot_on_or_before(day, user_id=require_user_id())
     funds, total_other, snap_date = [], 0.0, None
     if snap:
         import json as _json
@@ -166,7 +167,7 @@ async def _positions_as_of(day: str) -> tuple[list, list, float, dict]:
             by = {}
         meta = {}
         try:
-            for a in await list_external_assets():
+            for a in await list_external_assets(user_id=require_user_id()):
                 meta[int(a["id"])] = a
         except Exception:
             pass

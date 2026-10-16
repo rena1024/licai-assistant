@@ -1,4 +1,5 @@
 """港美股: 成交日汇率(人民币口径已实现/成本)、券商收费方案选择、按成交日取规费、拆股/合股。"""
+from services.user_context import require_user_id
 import asyncio
 import json
 
@@ -188,17 +189,19 @@ def fresh_db(monkeypatch, tmp_path):
     import database as db
     monkeypatch.setattr("config.config.db_path", str(tmp_path / "t.db"))
     asyncio.run(db.init_db())
+    from tests.portfolio_fixtures import seed_business_owner
+    seed_business_owner(db.config.db_path)
     return db
 
 
 def test_db_fx_rate_column(fresh_db):
     db = fresh_db
-    aid = asyncio.run(db.add_position_action("US.AAPL", "BUY", 100.0, 10, trade_date="2026-06-01", fx_rate=7.15))
-    row = asyncio.run(db.get_position_actions("US.AAPL"))[0]
+    aid = asyncio.run(db.add_position_action("US.AAPL", "BUY", 100.0, 10, trade_date="2026-06-01", fx_rate=7.15, user_id=require_user_id()))
+    row = asyncio.run(db.get_position_actions("US.AAPL", user_id=require_user_id()))[0]
     assert row["fx_rate"] == 7.15
-    asyncio.run(db.update_position_action(aid, fx_rate=7.2))
-    assert asyncio.run(db.get_position_actions("US.AAPL"))[0]["fx_rate"] == 7.2
-    asyncio.run(db.update_position_action(aid, fx_rate=0))         # 0 = 清空
-    assert asyncio.run(db.get_position_actions("US.AAPL"))[0]["fx_rate"] is None
-    asyncio.run(db.update_position_action(aid, note="x"))          # 不传不动
-    assert asyncio.run(db.get_position_actions("US.AAPL"))[0]["fx_rate"] is None
+    asyncio.run(db.update_position_action(aid, fx_rate=7.2, user_id=require_user_id()))
+    assert asyncio.run(db.get_position_actions("US.AAPL", user_id=require_user_id()))[0]["fx_rate"] == 7.2
+    asyncio.run(db.update_position_action(aid, fx_rate=0, user_id=require_user_id()))         # 0 = 清空
+    assert asyncio.run(db.get_position_actions("US.AAPL", user_id=require_user_id()))[0]["fx_rate"] is None
+    asyncio.run(db.update_position_action(aid, note="x", user_id=require_user_id()))          # 不传不动
+    assert asyncio.run(db.get_position_actions("US.AAPL", user_id=require_user_id()))[0]["fx_rate"] is None

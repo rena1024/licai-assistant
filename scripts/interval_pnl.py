@@ -3,7 +3,7 @@
 盈亏 = 现市值 - 起始日收盘市值 - 期间净流入(买入-卖出)
 起始日市值取 portfolio_snapshots(收盘后落的真实市值), 现市值走看板同一套 enrich。
 A股现金流用 price*shares±fee 自算(position_actions 没有 amount 列)。
-用法: python scripts/interval_pnl.py 2026-07-29
+用法: python scripts/interval_pnl.py 2026-07-29 --user-id <账号ID>
 """
 from __future__ import annotations
 
@@ -13,6 +13,7 @@ import sys
 import os
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from services.user_context import require_user_id, user_scope
 
 BUY_ACTS = {"BUY", "ADD", "DEPOSIT"}
 SELL_ACTS = {"SELL", "REDUCE", "REDEEM", "WITHDRAW"}
@@ -26,7 +27,7 @@ async def main(start: str) -> None:
     DB_PATH = database_path(config.db_path)
 
     snaps = {r["snap_date"]: json.loads(r["by_asset"] or "{}")
-             for r in await list_portfolio_snapshots(limit=730)}
+             for r in await list_portfolio_snapshots(limit=730, user_id=require_user_id())}
     if start not in snaps:
         print(f"没有 {start} 的快照, 已有: {sorted(snaps)[-8:]}")
         return
@@ -60,7 +61,7 @@ async def main(start: str) -> None:
         db.row_factory = aiosqlite.Row
         async with db.execute(
             "SELECT stock_code,action_type,price,shares,COALESCE(fee,0) fee,stock_code "
-            "FROM position_actions WHERE trade_date > ?", (start,)) as cur:
+            "FROM position_actions WHERE trade_date > ? AND user_id = ?", (start, require_user_id())) as cur:
             for r in await cur.fetchall():
                 k = f"A:{r['stock_code']}"
                 gross = float(r["price"]) * float(r["shares"])
@@ -71,7 +72,7 @@ async def main(start: str) -> None:
                     flow[k] = flow.get(k, 0) - (gross - float(r["fee"]))
         async with db.execute(
             "SELECT asset_id,action_type,COALESCE(amount,0) amount,status,shares "
-            "FROM external_asset_actions WHERE trade_date > ?", (start,)) as cur:
+            "FROM external_asset_actions WHERE trade_date > ? AND user_id = ?", (start, require_user_id())) as cur:
             for r in await cur.fetchall():
                 k = f"EXT:{r['asset_id']}"
                 act = (r["action_type"] or "").upper()
@@ -117,4 +118,10 @@ async def main(start: str) -> None:
 
 
 if __name__ == "__main__":
-    asyncio.run(main(sys.argv[1] if len(sys.argv) > 1 else "2026-07-29"))
+    import argparse
+    parser = argparse.ArgumentParser(description='本机查看指定账号的区间盈亏')
+    parser.add_argument('start', help='起始快照日期 YYYY-MM-DD')
+    parser.add_argument('--user-id', required=True, type=int, help='明确指定数据所属账号 ID')
+    args = parser.parse_args()
+    with user_scope(args.user_id):
+        asyncio.run(main(args.start))

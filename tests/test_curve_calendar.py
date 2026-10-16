@@ -1,4 +1,5 @@
 """净值曲线日期轴(A股 ∪ 港美股交易日)、相关性时差对齐、港美股基准对照。全部离线。"""
+from services.user_context import require_user_id
 import asyncio
 
 import pandas as pd
@@ -90,6 +91,8 @@ def fake_env(monkeypatch, tmp_path):
     from services import portfolio_curve as pc
     monkeypatch.setattr("config.config.db_path", str(tmp_path / "t.db"))
     asyncio.run(db.init_db())
+    from tests.portfolio_fixtures import seed_business_owner
+    seed_business_owner(db.config.db_path)
     pc._cache.clear()
     pc._price_cache.clear()
     csi = pd.DataFrame([{"date": d, "close": 4000.0 + i} for i, d in enumerate(A_DAYS)])
@@ -115,8 +118,8 @@ def _curve():
 
 def test_pure_a_axis_is_csi_days(fake_env):
     db = fake_env
-    asyncio.run(db.add_holding("SH600000", "浦发", 100, 10))
-    asyncio.run(db.add_position_action("SH600000", "BUY", 10, 100, trade_date="2026-09-28", fee=0))
+    asyncio.run(db.add_holding("SH600000", "浦发", 100, 10, user_id=require_user_id()))
+    asyncio.run(db.add_position_action("SH600000", "BUY", 10, 100, trade_date="2026-09-28", fee=0, user_id=require_user_id()))
     r = _curve()
     assert r["dates"] == A_DAYS
     assert "港美股开市" not in r["note"]
@@ -124,9 +127,9 @@ def test_pure_a_axis_is_csi_days(fake_env):
 
 def test_hk_moves_land_on_hk_dates(fake_env):
     db = fake_env
-    asyncio.run(db.add_holding("HK.00700", "腾讯", 100, 100))
+    asyncio.run(db.add_holding("HK.00700", "腾讯", 100, 100, user_id=require_user_id()))
     asyncio.run(db.add_position_action("HK.00700", "BUY", 100, 100, trade_date="2026-09-28",
-                                       fee=0, fx_rate=0.9))
+                                       fee=0, fx_rate=0.9, user_id=require_user_id()))
     r = _curve()
     assert r["dates"] == HK_DAYS
     tw = dict(zip(r["dates"], r["twr"]))
@@ -142,11 +145,11 @@ def test_hk_moves_land_on_hk_dates(fake_env):
 
 def test_hk_trade_during_a_holiday_flows_on_its_day(fake_env):
     db = fake_env
-    asyncio.run(db.add_holding("SH600000", "浦发", 100, 10))
-    asyncio.run(db.add_position_action("SH600000", "BUY", 10, 100, trade_date="2026-09-28", fee=0))
-    asyncio.run(db.add_holding("HK.00700", "腾讯", 10, 110))
+    asyncio.run(db.add_holding("SH600000", "浦发", 100, 10, user_id=require_user_id()))
+    asyncio.run(db.add_position_action("SH600000", "BUY", 10, 100, trade_date="2026-09-28", fee=0, user_id=require_user_id()))
+    asyncio.run(db.add_holding("HK.00700", "腾讯", 10, 110, user_id=require_user_id()))
     asyncio.run(db.add_position_action("HK.00700", "BUY", 110, 10, trade_date="2026-10-02",
-                                       fee=0, fx_rate=0.9))
+                                       fee=0, fx_rate=0.9, user_id=require_user_id()))
     r = _curve()
     # 只在建仓后的港股交易日补点; 当天按收盘价买入 → 当天 TWR 不动
     assert "2026-10-02" in r["dates"] and "2026-09-29" in r["dates"]
@@ -159,9 +162,9 @@ def test_benchmark_includes_hk_in_cny_against_hsi(fake_env, monkeypatch):
     db = fake_env
     import api.portfolio_routes as pr
     from services import market_data as md
-    asyncio.run(db.add_holding("HK.00700", "腾讯", 100, 100))
+    asyncio.run(db.add_holding("HK.00700", "腾讯", 100, 100, user_id=require_user_id()))
     asyncio.run(db.add_position_action("HK.00700", "BUY", 100, 100, trade_date="2026-09-30",
-                                       fee=0, fx_rate=0.9))
+                                       fee=0, fx_rate=0.9, user_id=require_user_id()))
     hsi = pd.DataFrame([{"date": "2026-09-30", "close": 20000.0}, {"date": "2026-10-08", "close": 22000.0}])
     monkeypatch.setattr(md, "fetch_index_history", lambda s, n: hsi)
     monkeypatch.setattr(md, "fx_rate_on", lambda c, d: 0.9)

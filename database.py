@@ -1,6 +1,7 @@
 """SQLite database setup and operations."""
 from __future__ import annotations
 import aiosqlite
+from services.user_context import validate_user_id
 from config import config
 from services.runtime_paths import database_path, get_runtime_paths, LAYOUT_VERSION, RuntimePathError
 
@@ -9,6 +10,8 @@ from services.runtime_paths import database_path, get_runtime_paths, LAYOUT_VERS
 # 也退回它, 保证任何一只票至少能在某个分组视图里被看见。
 DEFAULT_WATCH_GROUP = "自选"
 ACCOUNT_SCHEMA_VERSION = "1"
+PORTFOLIO_SCHEMA_VERSION = "1"
+OWNED_PORTFOLIO_TABLES = ("external_asset_actions", "position_actions", "trade_log", "external_assets", "holdings", "portfolio_snapshots", "morning_briefings")
 # 首次启动自动插入的模板不是用户配置；初始化保护据此识别被修改的无归属费率。
 DEFAULT_BROKERS = (
     ("招商证券", 0.0001854, 5.0, 0.0001854, 5.0, 1),
@@ -36,17 +39,20 @@ def resolve_action_time(action: dict) -> str:
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS holdings (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    stock_code TEXT NOT NULL UNIQUE,
+    user_id INTEGER NOT NULL REFERENCES users(id),
+    stock_code TEXT NOT NULL,
     stock_name TEXT NOT NULL DEFAULT '',
     shares INTEGER NOT NULL,
     cost_price REAL NOT NULL,
     purchase_date TEXT,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(user_id, stock_code)
 );
 
 CREATE TABLE IF NOT EXISTS trade_log (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL REFERENCES users(id),
     stock_code TEXT NOT NULL,
     trade_type TEXT NOT NULL,
     price REAL NOT NULL,
@@ -118,6 +124,7 @@ CREATE TABLE IF NOT EXISTS unwind_tranches (
 
 CREATE TABLE IF NOT EXISTS external_assets (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL REFERENCES users(id),
     asset_type TEXT NOT NULL,       -- FUND / CRYPTO / BOT
     code TEXT NOT NULL,             -- fund code / symbol / bot label
     name TEXT NOT NULL,
@@ -127,11 +134,13 @@ CREATE TABLE IF NOT EXISTS external_assets (
     manual_value REAL,              -- manual override for current value (bots)
     note TEXT,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(user_id, id)
 );
 
 CREATE TABLE IF NOT EXISTS position_actions (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL REFERENCES users(id),
     stock_code TEXT NOT NULL,
     action_type TEXT NOT NULL,
     price REAL NOT NULL,
@@ -145,20 +154,23 @@ CREATE TABLE IF NOT EXISTS position_actions (
 
 CREATE TABLE IF NOT EXISTS morning_briefings (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL REFERENCES users(id),
     stock_code TEXT NOT NULL,
     briefing_date TEXT NOT NULL,
     payload_json TEXT NOT NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    UNIQUE(stock_code, briefing_date)
+    UNIQUE(user_id, stock_code, briefing_date)
 );
 
 -- 每日组合市值快照(收盘后记一次): 机器人/加密等无价史资产的真实市值序列,
 -- 净值曲线用它替代成本基线(快照攒得越久, 这部分曲线越真)
 CREATE TABLE IF NOT EXISTS portfolio_snapshots (
-    snap_date TEXT PRIMARY KEY,          -- YYYY-MM-DD
+    user_id INTEGER NOT NULL REFERENCES users(id),
+    snap_date TEXT NOT NULL,          -- YYYY-MM-DD
     total_value REAL NOT NULL,
     by_asset TEXT,                       -- JSON {"EXT:<id>"|"A:<code>": value}
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY(user_id, snap_date)
 );
 
 -- 自选观察池(在跟踪但未必持有的票)。分组不在这张表上, 见 watchlist_group。
@@ -295,6 +307,7 @@ CREATE TABLE IF NOT EXISTS cashflow_monthly (
 -- BOT 不走这张表 (走 OKX 同步).
 CREATE TABLE IF NOT EXISTS external_asset_actions (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL REFERENCES users(id),
     asset_id INTEGER NOT NULL,           -- FK external_assets.id
     action_type TEXT NOT NULL,           -- BUY | ADD | REDEEM | DEPOSIT | WITHDRAW | INTEREST | DIVIDEND
     amount REAL NOT NULL DEFAULT 0,      -- CNY 本金/赎回金额(总额); INTEREST/DIVIDEND 时为派息金额
@@ -304,7 +317,8 @@ CREATE TABLE IF NOT EXISTS external_asset_actions (
     trade_date TEXT,                     -- YYYY-MM-DD (申请日)
     status TEXT DEFAULT 'confirmed',     -- confirmed: 进 ledger; pending: T+1 待确认 (OTC 基金 申购/赎回)
     note TEXT DEFAULT '',
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY(user_id, asset_id) REFERENCES external_assets(user_id, id)
 );
 CREATE INDEX IF NOT EXISTS idx_eaa_asset_date ON external_asset_actions (asset_id, trade_date);
 
@@ -479,6 +493,23 @@ async def get_db() -> aiosqlite.Connection:
     return db
 
 
+async def _portfolio_upgrade_tables(db) -> list[str]:
+    """只升级空的旧业务表；账号信息保持原样，不猜测历史业务 owner。"""
+    old = []
+    for table in OWNED_PORTFOLIO_TABLES:
+        columns = await (await db.execute(f'PRAGMA table_info("{table}")')).fetchall()
+        if columns and 'user_id' not in {row['name'] for row in columns}:
+            if await (await db.execute(f'SELECT 1 FROM "{table}" LIMIT 1')).fetchone():
+                raise RuntimePathError('发现无归属历史业务数据，请使用新的空运行目录，不自动分配给管理员')
+            old.append(table)
+    metadata = await (await db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='runtime_metadata'")).fetchone()
+    if metadata:
+        version = await (await db.execute("SELECT value FROM runtime_metadata WHERE key='portfolio_schema_version'")).fetchone()
+        if version and version[0] != PORTFOLIO_SCHEMA_VERSION:
+            raise RuntimePathError('持仓归属数据库版本不兼容，停止初始化')
+    return old
+
+
 async def init_db():
     paths = get_runtime_paths()
     if paths.profile != "test":
@@ -491,11 +522,14 @@ async def init_db():
             version = await (await db.execute("SELECT value FROM runtime_metadata WHERE key='account_schema_version'")).fetchone()
             if version and version[0] != ACCOUNT_SCHEMA_VERSION:
                 raise RuntimePathError("账号数据库版本不兼容，停止初始化")
-        await db.executescript(SCHEMA)
+        old_tables = await _portfolio_upgrade_tables(db)
         await db.executescript(ACCOUNT_SCHEMA)
+        drops = ''.join(f'DROP TABLE "{table}";\n' for table in old_tables)
+        await db.executescript('BEGIN IMMEDIATE;\n' + drops + SCHEMA + '\nCOMMIT;')
         await db.execute("CREATE TABLE IF NOT EXISTS runtime_metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
         await db.execute("INSERT OR IGNORE INTO runtime_metadata VALUES ('layout_version', ?)", (LAYOUT_VERSION,))
         await db.execute("INSERT OR IGNORE INTO runtime_metadata VALUES ('account_schema_version', ?)", (ACCOUNT_SCHEMA_VERSION,))
+        await db.execute("INSERT OR IGNORE INTO runtime_metadata VALUES ('portfolio_schema_version', ?)", (PORTFOLIO_SCHEMA_VERSION,))
         # Migration: add trade_date to position_actions if missing
         cursor = await db.execute("PRAGMA table_info(position_actions)")
         cols = {row[1] for row in await cursor.fetchall()}
@@ -664,10 +698,10 @@ async def init_db():
 
         # Seed: any holding without a position_action → create initial BUY action
         cursor = await db.execute("""
-            SELECT h.stock_code, h.shares, h.cost_price, h.created_at
+            SELECT h.user_id, h.stock_code, h.shares, h.cost_price, h.created_at
             FROM holdings h
             WHERE NOT EXISTS (
-                SELECT 1 FROM position_actions a WHERE a.stock_code = h.stock_code
+                SELECT 1 FROM position_actions a WHERE a.stock_code = h.stock_code AND a.user_id = h.user_id
             )
         """)
         rows = await cursor.fetchall()
@@ -678,19 +712,19 @@ async def init_db():
             created = str(r["created_at"])[:10] if r["created_at"] else None
             await db.execute(
                 """INSERT INTO position_actions
-                   (stock_code, action_type, price, shares, note, trade_date)
-                   VALUES (?, 'BUY', ?, ?, 'initial (auto-migrated)', ?)""",
-                (code, cost, shares, created),
+                   (user_id, stock_code, action_type, price, shares, note, trade_date)
+                   VALUES (?, ?, 'BUY', ?, ?, 'initial (auto-migrated)', ?)""",
+                (r["user_id"], code, cost, shares, created),
             )
             print(f"[migration] Seeded initial BUY for {code}: {shares}股 @ {cost} on {created}")
         await db.commit()
 
         # Seed external_asset_actions: 给已有 external_assets 还没 actions 的, 按当前 cost_amount 补一条 BUY/DEPOSIT
         cursor = await db.execute("""
-            SELECT a.id, a.asset_type, a.cost_amount, a.shares, a.start_date, a.created_at
+            SELECT a.user_id, a.id, a.asset_type, a.cost_amount, a.shares, a.start_date, a.created_at
             FROM external_assets a
             WHERE NOT EXISTS (
-                SELECT 1 FROM external_asset_actions ea WHERE ea.asset_id = a.id
+                SELECT 1 FROM external_asset_actions ea WHERE ea.asset_id = a.id AND ea.user_id = a.user_id
             )
         """)
         rows = await cursor.fetchall()
@@ -706,9 +740,9 @@ async def init_db():
             seed_date = (r["start_date"] or str(r["created_at"] or "")[:10]) or None
             await db.execute(
                 """INSERT INTO external_asset_actions
-                   (asset_id, action_type, amount, shares, unit_price, trade_date, note)
-                   VALUES (?, ?, ?, ?, ?, ?, 'initial (auto-migrated)')""",
-                (asset_id, action_type, cost, float(shares) if shares else None, unit_price, seed_date),
+                   (user_id, asset_id, action_type, amount, shares, unit_price, trade_date, note)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, 'initial (auto-migrated)')""",
+                (r["user_id"], asset_id, action_type, cost, float(shares) if shares else None, unit_price, seed_date),
             )
             print(f"[migration] Seeded {action_type} for asset#{asset_id} ({atype}): ¥{cost} on {seed_date}")
         await db.commit()
@@ -733,43 +767,49 @@ async def init_db():
 
 # --- Holdings CRUD ---
 
-async def get_all_holdings() -> list[dict]:
+async def get_all_holdings(*, user_id: int) -> list[dict]:
+    validate_user_id(user_id)
     db = await get_db()
     try:
-        cursor = await db.execute("SELECT * FROM holdings ORDER BY stock_code")
+        cursor = await db.execute("SELECT * FROM holdings WHERE user_id = ? ORDER BY stock_code", (user_id,))
         rows = await cursor.fetchall()
         return [dict(row) for row in rows]
     finally:
         await db.close()
 
 
-async def get_holding(stock_code: str) -> dict | None:
+async def get_holding(stock_code: str, *, user_id: int) -> dict | None:
+    validate_user_id(user_id)
     db = await get_db()
     try:
-        cursor = await db.execute("SELECT * FROM holdings WHERE stock_code = ?", (stock_code,))
+        cursor = await db.execute("SELECT * FROM holdings WHERE stock_code = ? AND user_id = ?", (stock_code, user_id))
         row = await cursor.fetchone()
         return dict(row) if row else None
     finally:
         await db.close()
 
 
-async def add_holding(stock_code: str, stock_name: str, shares: int, cost_price: float):
+async def add_holding(stock_code: str, stock_name: str, shares: int, cost_price: float, *, user_id: int):
+    validate_user_id(user_id)
     db = await get_db()
     try:
         await db.execute(
-            "INSERT INTO holdings (stock_code, stock_name, shares, cost_price) VALUES (?, ?, ?, ?)",
-            (stock_code, stock_name, shares, cost_price),
+            "INSERT INTO holdings (user_id, stock_code, stock_name, shares, cost_price) VALUES (?, ?, ?, ?, ?)",
+            (user_id, stock_code, stock_name, shares, cost_price),
         )
         await db.commit()
     finally:
         await db.close()
 
 
-async def update_holding(stock_code: str, **kwargs):
+async def update_holding(stock_code: str, *, user_id: int, **kwargs):
+    validate_user_id(user_id)
     db = await get_db()
     try:
         sets = []
         vals = []
+        if set(kwargs) - {"stock_name", "shares", "cost_price", "purchase_date", "broker"}:
+            raise ValueError("不允许更新该持仓字段")
         for k, v in kwargs.items():
             if v is not None:
                 sets.append(f"{k} = ?")
@@ -777,9 +817,9 @@ async def update_holding(stock_code: str, **kwargs):
         if not sets:
             return
         sets.append("updated_at = CURRENT_TIMESTAMP")
-        vals.append(stock_code)
+        vals.extend((stock_code, user_id))
         await db.execute(
-            f"UPDATE holdings SET {', '.join(sets)} WHERE stock_code = ?",
+            f"UPDATE holdings SET {', '.join(sets)} WHERE stock_code = ? AND user_id = ?",
             vals,
         )
         await db.commit()
@@ -787,10 +827,11 @@ async def update_holding(stock_code: str, **kwargs):
         await db.close()
 
 
-async def delete_holding(stock_code: str):
+async def delete_holding(stock_code: str, *, user_id: int):
+    validate_user_id(user_id)
     db = await get_db()
     try:
-        await db.execute("DELETE FROM holdings WHERE stock_code = ?", (stock_code,))
+        await db.execute("DELETE FROM holdings WHERE stock_code = ? AND user_id = ?", (stock_code, user_id))
         await db.commit()
     finally:
         await db.close()
@@ -935,13 +976,14 @@ async def get_cached_closes(codes: list[str], day: str) -> dict[str, float]:
         await db.close()
 
 
-async def get_position_actions_until(day: str) -> dict[str, list[dict]]:
+async def get_position_actions_until(day: str, *, user_id: int) -> dict[str, list[dict]]:
     """截至 day(含)的全部持仓动作, 按股票代码分组(时间升序)。回放账本还原当时的持股。"""
+    validate_user_id(user_id)
     db = await get_db()
     try:
         cur = await db.execute(
-            "SELECT * FROM position_actions WHERE COALESCE(trade_date, date(created_at)) <= ? "
-            "ORDER BY COALESCE(trade_date, date(created_at)), id", (day,))
+            "SELECT * FROM position_actions WHERE user_id = ? AND COALESCE(trade_date, date(created_at)) <= ? "
+            "ORDER BY COALESCE(trade_date, date(created_at)), id", (user_id, day))
         out: dict[str, list[dict]] = {}
         for r in await cur.fetchall():
             out.setdefault(r["stock_code"], []).append(dict(r))
@@ -950,14 +992,15 @@ async def get_position_actions_until(day: str) -> dict[str, list[dict]]:
         await db.close()
 
 
-async def get_snapshot_on_or_before(day: str) -> dict | None:
+async def get_snapshot_on_or_before(day: str, *, user_id: int) -> dict | None:
     """day(含)之前最近一条组合快照。外部资产(基金/理财/现金)没有可回溯的价格历史,
     只有这条快照记了当时的真实市值。"""
+    validate_user_id(user_id)
     db = await get_db()
     try:
         cur = await db.execute(
             "SELECT snap_date, total_value, by_asset FROM portfolio_snapshots "
-            "WHERE snap_date <= ? ORDER BY snap_date DESC LIMIT 1", (day,))
+            "WHERE user_id = ? AND snap_date <= ? ORDER BY snap_date DESC LIMIT 1", (user_id, day))
         r = await cur.fetchone()
         return dict(r) if r else None
     finally:
@@ -1332,50 +1375,54 @@ async def mark_tranche_executed(tranche_id: int, executed_price: float):
 
 # --- External assets (ETFs / funds / crypto / bots) ---
 
-async def list_external_assets(include_closed: bool = False) -> list[dict]:
+async def list_external_assets(include_closed: bool = False, *, user_id: int) -> list[dict]:
     """在持外部资产(全系统'我的持仓/看板'的唯一来源)。默认排除已平仓归档的(closed=1),
     一处过滤处处生效; include_closed=True 才返回全部(含归档)。"""
+    validate_user_id(user_id)
     db = await get_db()
     try:
-        sql = "SELECT * FROM external_assets"
+        sql = "SELECT * FROM external_assets WHERE user_id = ?"
         if not include_closed:
-            sql += " WHERE COALESCE(closed, 0) = 0"
+            sql += " AND COALESCE(closed, 0) = 0"
         sql += " ORDER BY asset_type, id"
-        cursor = await db.execute(sql)
+        cursor = await db.execute(sql, (user_id,))
         rows = await cursor.fetchall()
         return [dict(r) for r in rows]
     finally:
         await db.close()
 
 
-async def list_closed_external_assets() -> list[dict]:
+async def list_closed_external_assets(*, user_id: int) -> list[dict]:
     """已平仓归档的外部资产(供已实现盈亏统计)。"""
+    validate_user_id(user_id)
     db = await get_db()
     try:
-        cursor = await db.execute("SELECT * FROM external_assets WHERE COALESCE(closed, 0) = 1 ORDER BY closed_date DESC")
+        cursor = await db.execute("SELECT * FROM external_assets WHERE user_id = ? AND COALESCE(closed, 0) = 1 ORDER BY closed_date DESC", (user_id,))
         return [dict(r) for r in await cursor.fetchall()]
     finally:
         await db.close()
 
 
-async def close_external_asset(asset_id: int, realized_cny: float, closed_date: str) -> None:
+async def close_external_asset(asset_id: int, realized_cny: float, closed_date: str, *, user_id: int) -> None:
     """平仓归档: 标记 closed=1, 记下平仓时已实现盈亏(CNY), 市值归零(退出在持)。"""
+    validate_user_id(user_id)
     db = await get_db()
     try:
         await db.execute(
             "UPDATE external_assets SET closed = 1, closed_realized = ?, closed_date = ?, "
-            "manual_value = 0, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-            (round(float(realized_cny), 2), closed_date, asset_id),
+            "manual_value = 0, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND user_id = ?",
+            (round(float(realized_cny), 2), closed_date, asset_id, user_id),
         )
         await db.commit()
     finally:
         await db.close()
 
 
-async def get_external_asset(asset_id: int) -> dict | None:
+async def get_external_asset(asset_id: int, *, user_id: int) -> dict | None:
+    validate_user_id(user_id)
     db = await get_db()
     try:
-        cursor = await db.execute("SELECT * FROM external_assets WHERE id = ?", (asset_id,))
+        cursor = await db.execute("SELECT * FROM external_assets WHERE id = ? AND user_id = ?", (asset_id, user_id))
         row = await cursor.fetchone()
         return dict(row) if row else None
     finally:
@@ -1391,15 +1438,16 @@ async def add_external_asset(asset_type: str, code: str, name: str, platform: st
                               start_date: str | None = None,
                               pending_amount: float | None = None,
                               purchase_fee_rate: float | None = None,
-                              broker: str | None = None) -> int:
+                              broker: str | None = None, *, user_id: int) -> int:
+    validate_user_id(user_id)
     db = await get_db()
     try:
         cursor = await db.execute(
             """INSERT INTO external_assets
-               (asset_type, code, name, platform, cost_amount, shares, manual_value, note,
+               (user_id, asset_type, code, name, platform, cost_amount, shares, manual_value, note,
                 okx_algo_id, okx_bot_type, annual_yield_rate, start_date, pending_amount, purchase_fee_rate, broker)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (asset_type, code, name, platform, cost_amount, shares, manual_value, note,
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (user_id, asset_type, code, name, platform, cost_amount, shares, manual_value, note,
              okx_algo_id, okx_bot_type, annual_yield_rate, start_date, pending_amount or 0, purchase_fee_rate, broker),
         )
         await db.commit()
@@ -1408,22 +1456,25 @@ async def add_external_asset(asset_type: str, code: str, name: str, platform: st
         await db.close()
 
 
-async def update_external_asset(asset_id: int, **kwargs):
+async def update_external_asset(asset_id: int, *, user_id: int, **kwargs):
+    validate_user_id(user_id)
     if not kwargs:
         return
+    if set(kwargs) - {"name", "platform", "cost_amount", "shares", "manual_value", "note", "okx_algo_id", "okx_bot_type", "annual_yield_rate", "start_date", "pending_amount", "purchase_fee_rate", "broker", "bot_budget_override_usdt", "closed", "closed_date", "closed_realized", "code", "asset_type"}:
+        raise ValueError("不允许更新该资产字段")
     cols = ", ".join(f"{k} = ?" for k in kwargs)
     db = await get_db()
     try:
         await db.execute(
-            f"UPDATE external_assets SET {cols}, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-            (*kwargs.values(), asset_id),
+            f"UPDATE external_assets SET {cols}, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND user_id = ?",
+            (*kwargs.values(), asset_id, user_id),
         )
         await db.commit()
     finally:
         await db.close()
 
 
-async def delete_external_asset(asset_id: int):
+async def delete_external_asset(asset_id: int, *, user_id: int):
     """删资产时连带清掉它的定投计划和流水。
 
     不连带的后果实测过: 计划还 active, 每天往已不存在的 asset_id 写一条 pending
@@ -1431,22 +1482,30 @@ async def delete_external_asset(asset_id: int):
     流水离了资产在 UI 上也已经不可达。合并资产走 reassign_external_actions
     先搬走再删, 所以这里删到的只会是真正的孤儿。
     """
+    validate_user_id(user_id)
     db = await get_db()
     try:
+        if not await (await db.execute("SELECT 1 FROM external_assets WHERE id=? AND user_id=?", (asset_id, user_id))).fetchone():
+            return False
         await db.execute("DELETE FROM dca_schedules WHERE asset_id = ?", (asset_id,))
-        await db.execute("DELETE FROM external_asset_actions WHERE asset_id = ?", (asset_id,))
-        await db.execute("DELETE FROM external_assets WHERE id = ?", (asset_id,))
+        await db.execute("DELETE FROM external_asset_actions WHERE asset_id = ? AND user_id = ?", (asset_id, user_id))
+        await db.execute("DELETE FROM external_assets WHERE id = ? AND user_id = ?", (asset_id, user_id))
         await db.commit()
     finally:
         await db.close()
 
 
-async def reassign_external_actions(source_id: int, target_id: int) -> int:
+async def reassign_external_actions(source_id: int, target_id: int, *, user_id: int) -> int:
     """把 source 资产的全部流水 + DCA 计划改挂到 target (合并重复资产用)。返回搬动的流水条数。"""
+    validate_user_id(user_id)
     db = await get_db()
     try:
+        await db.execute("BEGIN IMMEDIATE")
+        for asset_id in (source_id, target_id):
+            if not await (await db.execute("SELECT 1 FROM external_assets WHERE id=? AND user_id=?", (asset_id, user_id))).fetchone():
+                raise ValueError("资产不存在或不属于当前账号")
         cur = await db.execute(
-            "UPDATE external_asset_actions SET asset_id = ? WHERE asset_id = ?", (target_id, source_id))
+            "UPDATE external_asset_actions SET asset_id = ? WHERE asset_id = ? AND user_id = ?", (target_id, source_id, user_id))
         await db.execute(
             "UPDATE dca_schedules SET asset_id = ? WHERE asset_id = ?", (target_id, source_id))
         await db.commit()
@@ -1487,30 +1546,32 @@ async def clear_tranche_sold_back(tranche_id: int):
 # --- Position Actions Log ---
 
 async def log_position_action(stock_code: str, action_type: str, price: float, shares: int,
-                               tranche_id: int | None = None, note: str = ""):
+                               tranche_id: int | None = None, note: str = "", *, user_id: int):
+    validate_user_id(user_id)
     db = await get_db()
     try:
         await db.execute(
-            """INSERT INTO position_actions (stock_code, action_type, price, shares, tranche_id, note)
-               VALUES (?, ?, ?, ?, ?, ?)""",
-            (stock_code, action_type, price, shares, tranche_id, note),
+            """INSERT INTO position_actions (user_id, stock_code, action_type, price, shares, tranche_id, note)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            (user_id, stock_code, action_type, price, shares, tranche_id, note),
         )
         await db.commit()
     finally:
         await db.close()
 
 
-async def get_position_actions(stock_code: str = None, limit: int = 200) -> list[dict]:
+async def get_position_actions(stock_code: str = None, limit: int = 200, *, user_id: int) -> list[dict]:
+    validate_user_id(user_id)
     db = await get_db()
     try:
         if stock_code:
             cursor = await db.execute(
-                "SELECT * FROM position_actions WHERE stock_code = ? ORDER BY created_at DESC LIMIT ?",
-                (stock_code, limit),
+                "SELECT * FROM position_actions WHERE user_id = ? AND stock_code = ? ORDER BY created_at DESC LIMIT ?",
+                (user_id, stock_code, limit),
             )
         else:
             cursor = await db.execute(
-                "SELECT * FROM position_actions ORDER BY created_at DESC LIMIT ?", (limit,)
+                "SELECT * FROM position_actions WHERE user_id = ? ORDER BY created_at DESC LIMIT ?", (user_id, limit)
             )
         rows = await cursor.fetchall()
         return [dict(r) for r in rows]
@@ -1523,16 +1584,17 @@ async def get_position_actions(stock_code: str = None, limit: int = 200) -> list
 async def add_position_action(stock_code: str, action_type: str, price: float, shares: int,
                                trade_date: str = None, note: str = "", tranche_id: int = None,
                                fee: float | None = None, trade_time: str | None = None,
-                               broker: str | None = None, fx_rate: float | None = None) -> int:
+                               broker: str | None = None, fx_rate: float | None = None, *, user_id: int) -> int:
     """Insert a new action. Returns the new action id. fx_rate: 港美股成交日汇率(每 1 原币折人民币)。"""
+    validate_user_id(user_id)
     db = await get_db()
     try:
         cursor = await db.execute(
             """INSERT INTO position_actions
-               (stock_code, action_type, price, shares, trade_date, note, tranche_id, fee, trade_time, broker,
+               (user_id, stock_code, action_type, price, shares, trade_date, note, tranche_id, fee, trade_time, broker,
                 fx_rate)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (stock_code, action_type, price, shares, trade_date, note, tranche_id, fee, trade_time, broker,
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (user_id, stock_code, action_type, price, shares, trade_date, note, tranche_id, fee, trade_time, broker,
              fx_rate),
         )
         await db.commit()
@@ -1545,10 +1607,11 @@ async def update_position_action(action_id: int, action_type: str = None, price:
                                   shares: int = None, trade_date: str = None, note: str = None,
                                   fee: float | None = None, fee_explicit: bool = False,
                                   trade_time: str = None, broker: str = None,
-                                  fx_rate: float | None = None):
+                                  fx_rate: float | None = None, *, user_id: int):
     """Update fields. fee_explicit=True 表示明确想改 fee (即使传 None 也写入 NULL).
     fee 默认 None + fee_explicit=False 不动 fee 列。trade_time/broker 传空串 "" 可清空。
     fx_rate: None 不动; 正数设值; 0 清空(回退按当前汇率)。"""
+    validate_user_id(user_id)
     db = await get_db()
     try:
         sets, vals = [], []
@@ -1571,48 +1634,53 @@ async def update_position_action(action_id: int, action_type: str = None, price:
             vals.append(fx_rate if fx_rate > 0 else None)
         if not sets:
             return
-        vals.append(action_id)
-        await db.execute(
-            f"UPDATE position_actions SET {', '.join(sets)} WHERE id = ?", vals
+        vals.extend((action_id, user_id))
+        cursor = await db.execute(
+            f"UPDATE position_actions SET {', '.join(sets)} WHERE id = ? AND user_id = ?", vals
         )
         await db.commit()
+        return cursor.rowcount > 0
     finally:
         await db.close()
 
 
-async def delete_position_action(action_id: int):
+async def delete_position_action(action_id: int, *, user_id: int):
+    validate_user_id(user_id)
     db = await get_db()
     try:
-        await db.execute("DELETE FROM position_actions WHERE id = ?", (action_id,))
+        cursor = await db.execute("DELETE FROM position_actions WHERE id = ? AND user_id = ?", (action_id, user_id))
         await db.commit()
+        return cursor.rowcount > 0
     finally:
         await db.close()
 
 
 # --- Morning Briefings ---
 
-async def save_briefing(stock_code: str, briefing_date: str, payload_json: str):
+async def save_briefing(stock_code: str, briefing_date: str, payload_json: str, *, user_id: int):
+    validate_user_id(user_id)
     db = await get_db()
     try:
         await db.execute(
-            """INSERT INTO morning_briefings (stock_code, briefing_date, payload_json)
-               VALUES (?, ?, ?)
-               ON CONFLICT(stock_code, briefing_date) DO UPDATE SET
+            """INSERT INTO morning_briefings (user_id, stock_code, briefing_date, payload_json)
+               VALUES (?, ?, ?, ?)
+               ON CONFLICT(user_id, stock_code, briefing_date) DO UPDATE SET
                  payload_json = excluded.payload_json,
                  created_at = CURRENT_TIMESTAMP""",
-            (stock_code, briefing_date, payload_json),
+            (user_id, stock_code, briefing_date, payload_json),
         )
         await db.commit()
     finally:
         await db.close()
 
 
-async def get_briefings_for_date(briefing_date: str) -> list[dict]:
+async def get_briefings_for_date(briefing_date: str, *, user_id: int) -> list[dict]:
+    validate_user_id(user_id)
     db = await get_db()
     try:
         cursor = await db.execute(
-            "SELECT * FROM morning_briefings WHERE briefing_date = ? ORDER BY stock_code",
-            (briefing_date,),
+            "SELECT * FROM morning_briefings WHERE briefing_date = ? AND user_id = ? ORDER BY stock_code",
+            (briefing_date, user_id),
         )
         rows = await cursor.fetchall()
         return [dict(r) for r in rows]
@@ -1620,12 +1688,13 @@ async def get_briefings_for_date(briefing_date: str) -> list[dict]:
         await db.close()
 
 
-async def get_latest_briefing(stock_code: str) -> dict | None:
+async def get_latest_briefing(stock_code: str, *, user_id: int) -> dict | None:
+    validate_user_id(user_id)
     db = await get_db()
     try:
         cursor = await db.execute(
-            "SELECT * FROM morning_briefings WHERE stock_code = ? ORDER BY briefing_date DESC LIMIT 1",
-            (stock_code,),
+            "SELECT * FROM morning_briefings WHERE stock_code = ? AND user_id = ? ORDER BY briefing_date DESC LIMIT 1",
+            (stock_code, user_id),
         )
         row = await cursor.fetchone()
         return dict(row) if row else None
@@ -1689,12 +1758,13 @@ async def delete_cashflow(month: str):
 
 # --- External Asset Actions ---
 
-async def list_external_actions(asset_id: int) -> list[dict]:
+async def list_external_actions(asset_id: int, *, user_id: int) -> list[dict]:
+    validate_user_id(user_id)
     db = await get_db()
     try:
         cursor = await db.execute(
-            "SELECT * FROM external_asset_actions WHERE asset_id = ? ORDER BY trade_date, id",
-            (asset_id,),
+            "SELECT * FROM external_asset_actions WHERE asset_id = ? AND user_id = ? ORDER BY trade_date, id",
+            (asset_id, user_id),
         )
         rows = await cursor.fetchall()
         return [dict(r) for r in rows]
@@ -1708,14 +1778,17 @@ async def add_external_action(asset_id: int, action_type: str, amount: float = 0
                               status: str = "confirmed",
                               interest_part: float | None = None,
                               fee: float | None = None,
-                              trade_time: str | None = None) -> int:
+                              trade_time: str | None = None, *, user_id: int) -> int:
+    validate_user_id(user_id)
     db = await get_db()
     try:
+        if not await (await db.execute("SELECT 1 FROM external_assets WHERE id=? AND user_id=?", (asset_id, user_id))).fetchone():
+            raise ValueError("资产不存在或不属于当前账号")
         cursor = await db.execute(
             """INSERT INTO external_asset_actions
-               (asset_id, action_type, amount, shares, unit_price, trade_date, status, note, interest_part, fee, trade_time)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (asset_id, action_type, float(amount or 0),
+               (user_id, asset_id, action_type, amount, shares, unit_price, trade_date, status, note, interest_part, fee, trade_time)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (user_id, asset_id, action_type, float(amount or 0),
              float(shares) if shares is not None else None,
              float(unit_price) if unit_price is not None else None,
              trade_date, status, note or "",
@@ -1728,41 +1801,48 @@ async def add_external_action(asset_id: int, action_type: str, amount: float = 0
         await db.close()
 
 
-async def update_external_action(action_id: int, **kwargs):
+async def update_external_action(action_id: int, *, user_id: int, **kwargs):
+    validate_user_id(user_id)
     if not kwargs:
         return
+    if set(kwargs) - {"action_type", "amount", "shares", "unit_price", "trade_date", "status", "note", "interest_part", "fee", "trade_time"}:
+        raise ValueError("不允许更新该资产流水字段")
     cols = ", ".join(f"{k} = ?" for k in kwargs.keys())
     db = await get_db()
     try:
-        await db.execute(
-            f"UPDATE external_asset_actions SET {cols} WHERE id = ?",
-            (*kwargs.values(), action_id),
+        cursor = await db.execute(
+            f"UPDATE external_asset_actions SET {cols} WHERE id = ? AND user_id = ?",
+            (*kwargs.values(), action_id, user_id),
         )
         await db.commit()
+        return cursor.rowcount > 0
     finally:
         await db.close()
 
 
-async def delete_external_action(action_id: int):
+async def delete_external_action(action_id: int, *, user_id: int):
+    validate_user_id(user_id)
     db = await get_db()
     try:
-        await db.execute("DELETE FROM external_asset_actions WHERE id = ?", (action_id,))
+        cursor = await db.execute("DELETE FROM external_asset_actions WHERE id = ? AND user_id = ?", (action_id, user_id))
         await db.commit()
+        return cursor.rowcount > 0
     finally:
         await db.close()
 
 
 # --- DCA Schedules ---
 
-async def list_dca_schedules(asset_id: int | None = None) -> list[dict]:
+async def list_dca_schedules(asset_id: int | None = None, *, user_id: int) -> list[dict]:
+    validate_user_id(user_id)
     db = await get_db()
     try:
         if asset_id is None:
-            cursor = await db.execute("SELECT * FROM dca_schedules ORDER BY id")
+            cursor = await db.execute("SELECT * FROM dca_schedules WHERE asset_id IN (SELECT id FROM external_assets WHERE user_id = ?) ORDER BY id", (user_id,))
         else:
             cursor = await db.execute(
-                "SELECT * FROM dca_schedules WHERE asset_id = ? ORDER BY id",
-                (asset_id,),
+                "SELECT * FROM dca_schedules WHERE asset_id = ? AND asset_id IN (SELECT id FROM external_assets WHERE user_id = ?) ORDER BY id",
+                (asset_id, user_id),
             )
         rows = await cursor.fetchall()
         return [dict(r) for r in rows]
@@ -1770,10 +1850,11 @@ async def list_dca_schedules(asset_id: int | None = None) -> list[dict]:
         await db.close()
 
 
-async def get_dca_schedule(dca_id: int) -> dict | None:
+async def get_dca_schedule(dca_id: int, *, user_id: int) -> dict | None:
+    validate_user_id(user_id)
     db = await get_db()
     try:
-        cursor = await db.execute("SELECT * FROM dca_schedules WHERE id = ?", (dca_id,))
+        cursor = await db.execute("SELECT * FROM dca_schedules WHERE id = ? AND asset_id IN (SELECT id FROM external_assets WHERE user_id = ?)", (dca_id, user_id))
         row = await cursor.fetchone()
         return dict(row) if row else None
     finally:
@@ -1784,11 +1865,14 @@ async def add_dca_schedule(asset_id: int, mode: str, value: float,
                            frequency: str = "monthly",
                            day_of_month: int | None = None,
                            day_of_week: int | None = None,
-                           next_due: str | None = None, note: str = "") -> int:
+                           next_due: str | None = None, note: str = "", *, user_id: int) -> int:
     # 旧 schema day_of_month 是 NOT NULL, 给 daily/weekly 模式时塞个占位 (1), fire 逻辑会按 frequency 忽略
     dom = int(day_of_month) if day_of_month is not None else 1
+    validate_user_id(user_id)
     db = await get_db()
     try:
+        if not await (await db.execute("SELECT 1 FROM external_assets WHERE id=? AND user_id=?", (asset_id, user_id))).fetchone():
+            raise ValueError("资产不存在或不属于当前账号")
         cursor = await db.execute(
             """INSERT INTO dca_schedules
                (asset_id, mode, value, frequency, day_of_month, day_of_week, next_due, note)
@@ -1803,37 +1887,42 @@ async def add_dca_schedule(asset_id: int, mode: str, value: float,
         await db.close()
 
 
-async def update_dca_schedule(dca_id: int, **kwargs):
+async def update_dca_schedule(dca_id: int, *, user_id: int, **kwargs):
+    if set(kwargs) - {"mode", "value", "frequency", "day_of_month", "day_of_week", "status", "next_due", "last_fired_at", "note"}:
+        raise ValueError("不允许更新该定投字段")
     if not kwargs:
         return
     cols = ", ".join(f"{k} = ?" for k in kwargs.keys())
+    validate_user_id(user_id)
     db = await get_db()
     try:
         await db.execute(
-            f"UPDATE dca_schedules SET {cols}, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-            (*kwargs.values(), dca_id),
+            f"UPDATE dca_schedules SET {cols}, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND asset_id IN (SELECT id FROM external_assets WHERE user_id = ?)",
+            (*kwargs.values(), dca_id, user_id),
         )
         await db.commit()
     finally:
         await db.close()
 
 
-async def delete_dca_schedule(dca_id: int):
+async def delete_dca_schedule(dca_id: int, *, user_id: int):
+    validate_user_id(user_id)
     db = await get_db()
     try:
-        await db.execute("DELETE FROM dca_schedules WHERE id = ?", (dca_id,))
+        await db.execute("DELETE FROM dca_schedules WHERE id = ? AND asset_id IN (SELECT id FROM external_assets WHERE user_id = ?)", (dca_id, user_id))
         await db.commit()
     finally:
         await db.close()
 
 
-async def list_due_dca_schedules(today_str: str) -> list[dict]:
+async def list_due_dca_schedules(today_str: str, *, user_id: int) -> list[dict]:
+    validate_user_id(user_id)
     db = await get_db()
     try:
         cursor = await db.execute(
             """SELECT * FROM dca_schedules
-               WHERE status = 'active' AND next_due IS NOT NULL AND next_due <= ?""",
-            (today_str,),
+               WHERE asset_id IN (SELECT id FROM external_assets WHERE user_id = ?) AND status = 'active' AND next_due IS NOT NULL AND next_due <= ?""",
+            (user_id, today_str),
         )
         rows = await cursor.fetchall()
         return [dict(r) for r in rows]
@@ -1902,23 +1991,25 @@ async def delete_broker(broker_id: int):
 
 # ---- 每日组合市值快照 ----
 
-async def save_portfolio_snapshot(snap_date: str, total_value: float, by_asset_json: str):
+async def save_portfolio_snapshot(snap_date: str, total_value: float, by_asset_json: str, *, user_id: int):
+    validate_user_id(user_id)
     db = await get_db()
     try:
         await db.execute(
-            "INSERT OR REPLACE INTO portfolio_snapshots (snap_date, total_value, by_asset) VALUES (?, ?, ?)",
-            (snap_date, total_value, by_asset_json))
+            "INSERT OR REPLACE INTO portfolio_snapshots (user_id, snap_date, total_value, by_asset) VALUES (?, ?, ?, ?)",
+            (user_id, snap_date, total_value, by_asset_json))
         await db.commit()
     finally:
         await db.close()
 
 
-async def list_portfolio_snapshots(limit: int = 500) -> list[dict]:
+async def list_portfolio_snapshots(limit: int = 500, *, user_id: int) -> list[dict]:
+    validate_user_id(user_id)
     db = await get_db()
     try:
         cur = await db.execute(
-            "SELECT snap_date, total_value, by_asset FROM portfolio_snapshots ORDER BY snap_date DESC LIMIT ?",
-            (limit,))
+            "SELECT snap_date, total_value, by_asset FROM portfolio_snapshots WHERE user_id = ? ORDER BY snap_date DESC LIMIT ?",
+            (user_id, limit))
         rows = await cur.fetchall()
         return [{"snap_date": r[0], "total_value": r[1], "by_asset": r[2]} for r in rows]
     finally:

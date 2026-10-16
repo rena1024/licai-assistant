@@ -9,6 +9,7 @@
 数据 = 东财公开接口(akshare), 预约日期可能变更, 以交易所最新公告为准。
 """
 from __future__ import annotations
+from services.user_context import require_user_id
 
 import asyncio
 import time
@@ -122,7 +123,7 @@ async def _watch_list() -> list[dict]:
             seen[code] = {"code": code, "name": h.get("stock_name") or code, "via": "直接持有"}
 
     etfs = [(str(x.get("code")), x.get("name") or "")
-            for x in await list_external_assets()
+            for x in await list_external_assets(user_id=require_user_id())
             if (x.get("asset_type") or "").upper() == "FUND"
             and (x.get("shares") or 0) > 0 and _is_onchain_etf(str(x.get("code") or ""))]
     sem = asyncio.Semaphore(3)
@@ -147,7 +148,7 @@ async def _watch_list() -> list[dict]:
 
 async def upcoming_events() -> dict:
     """主入口: 未来 75 天的持仓相关事件时间轴。缓存1h。"""
-    c = _cache.get("events")
+    c = _cache.get((require_user_id(), "events"))
     if c and time.time() - c[1] < _TTL:
         return c[0]
     watch = await _watch_list()
@@ -177,5 +178,5 @@ async def upcoming_events() -> dict:
            "watch_count": len(watch), "events": events,
            "note": f"监控 {len(watch)} 只标的(A股直持 + 场内ETF前十大成分≥3%), 未来 {_HORIZON_DAYS} 天。"
                    "财报预约日期以交易所最新公告为准, 可能变更。纯客观信息, 不构成任何买卖建议。"}
-    _cache["events"] = (out, time.time())
+    _cache[(require_user_id(), "events")] = (out, time.time())
     return out

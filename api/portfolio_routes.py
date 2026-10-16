@@ -1,5 +1,6 @@
 """Portfolio management REST endpoints."""
 from __future__ import annotations
+from services.user_context import require_user_id
 import asyncio
 from typing import Optional
 from fastapi import APIRouter, HTTPException
@@ -120,20 +121,20 @@ def _current_segment_brokers(actions: list, default_broker) -> list:
 
 async def _recompute_holding(stock_code: str):
     """Rebuild holding shares/cost_price from FIFO ledger."""
-    actions = await get_position_actions(stock_code, limit=500)
-    h = await get_holding(stock_code)
+    actions = await get_position_actions(stock_code, limit=500, user_id=require_user_id())
+    h = await get_holding(stock_code, user_id=require_user_id())
     hb = (h or {}).get("broker")
     state = await ledger_state(stock_code, actions, hb, dilute=False)   # 每笔按各自券商费率
     if state["shares"] > 0:
-        await update_holding(stock_code, shares=state["shares"], cost_price=state["cost_price"])
+        await update_holding(stock_code, shares=state["shares"], cost_price=state["cost_price"], user_id=require_user_id())
     else:
         # No shares left — keep holding row but set shares=0
-        await update_holding(stock_code, shares=0, cost_price=0)
+        await update_holding(stock_code, shares=0, cost_price=0, user_id=require_user_id())
 
 
 @router.get("")
 async def list_holdings() -> list[HoldingResponse]:
-    holdings = await get_all_holdings()
+    holdings = await get_all_holdings(user_id=require_user_id())
     if not holdings:
         return []
 
@@ -176,7 +177,7 @@ async def list_holdings() -> list[HoldingResponse]:
         fx_rate = float(fx_info.get("rate") or 1.0)
         cost_value_cny = None      # 港美股: 按各笔成交日汇率折的人民币成本(含本金汇兑)
         try:
-            _acts = await get_position_actions(code, limit=500)
+            _acts = await get_position_actions(code, limit=500, user_id=require_user_id())
             if _acts:
                 _st = await ledger_state(code, _acts, hb, resolve=fee_resolve, fee_overrides=fee_overrides,
                                          fx_now=fx_rate if currency != "CNY" else None)
@@ -195,7 +196,7 @@ async def list_holdings() -> list[HoldingResponse]:
 
         # Auto-fix empty stock name
         if not h["stock_name"] and q and q.get("stock_name"):
-            await update_holding(code, stock_name=q["stock_name"])
+            await update_holding(code, stock_name=q["stock_name"], user_id=require_user_id())
             h["stock_name"] = q["stock_name"]
 
         unrealized_pnl = None
@@ -256,14 +257,14 @@ async def realized_pnl():
     db = await get_db()
     try:
         cursor = await db.execute(
-            "SELECT DISTINCT stock_code FROM position_actions ORDER BY stock_code"
+            "SELECT DISTINCT stock_code FROM position_actions WHERE user_id = ? ORDER BY stock_code", (require_user_id(),)
         )
         rows = await cursor.fetchall()
         codes = [r[0] for r in rows]
     finally:
         await db.close()
 
-    holdings_map = {h["stock_code"]: h for h in await get_all_holdings()}
+    holdings_map = {h["stock_code"]: h for h in await get_all_holdings(user_id=require_user_id())}
     from database import get_config
     from services.market_data import code_currency, code_fx
     resolve = await _broker_fee_resolver()
@@ -272,7 +273,7 @@ async def realized_pnl():
     total = 0.0
     total_carry = 0.0
     for code in codes:
-        actions = await get_position_actions(code, limit=500)
+        actions = await get_position_actions(code, limit=500, user_id=require_user_id())
         if not actions:
             continue
         # 账本按原币记(港股 HKD、美股 USD); 人民币口径每笔按自己的成交日汇率(fx_rate, 没记的按当前汇率),
@@ -346,19 +347,19 @@ async def trade_review():
 
     db = await get_db()
     try:
-        cursor = await db.execute("SELECT DISTINCT stock_code FROM position_actions ORDER BY stock_code")
+        cursor = await db.execute("SELECT DISTINCT stock_code FROM position_actions WHERE user_id = ? ORDER BY stock_code", (require_user_id(),))
         codes = [r[0] for r in await cursor.fetchall()]
     finally:
         await db.close()
 
-    holdings_map = {h["stock_code"]: h for h in await get_all_holdings()}
+    holdings_map = {h["stock_code"]: h for h in await get_all_holdings(user_id=require_user_id())}
     from database import get_config
     from services.market_data import code_currency as _code_cur
     resolve = await _broker_fee_resolver()
     fee_overrides = await get_config("fee_schedules")
     stats = []
     for code in codes:
-        actions = await get_position_actions(code, limit=500)
+        actions = await get_position_actions(code, limit=500, user_id=require_user_id())
         if not actions:
             continue
         state = await ledger_state(code, actions, (holdings_map.get(code) or {}).get("broker"),
@@ -503,12 +504,12 @@ async def trade_journal(limit: int = 80):
 
     db = await get_db()
     try:
-        cursor = await db.execute("SELECT DISTINCT stock_code FROM position_actions")
+        cursor = await db.execute("SELECT DISTINCT stock_code FROM position_actions WHERE user_id = ?", (require_user_id(),))
         codes = [r[0] for r in await cursor.fetchall()]
     finally:
         await db.close()
 
-    holdings_map = {h["stock_code"]: h for h in await get_all_holdings()}
+    holdings_map = {h["stock_code"]: h for h in await get_all_holdings(user_id=require_user_id())}
     quotes = await get_realtime_quotes(codes) if codes else {}
     name_cache = {}
     trades = []
@@ -523,7 +524,7 @@ async def trade_journal(limit: int = 80):
             except Exception:
                 name = code
             name_cache[code] = name
-        _acts = await get_position_actions(code, limit=500)
+        _acts = await get_position_actions(code, limit=500, user_id=require_user_id())
         # 港美股拆合股: 拆分前的成交价÷比例、股数×比例, 与现价同标度(否则 1 拆 4 前的买入显示 -75%)
         from services.position_ledger import split_ratio
         _splits = [((x.get("trade_date") or "")[:10], split_ratio(x)) for x in _acts
@@ -551,7 +552,7 @@ async def trade_journal(limit: int = 80):
     # ---- 基金/ETF 交易 (external_asset_actions): 场内ETF 当个股看, 场外基金当定投看 ----
     from database import list_external_assets, list_external_actions
     from services.external_assets import get_fund_quote, _is_onchain_etf
-    for a in await list_external_assets():
+    for a in await list_external_assets(user_id=require_user_id()):
         if a.get("asset_type") != "FUND":
             continue
         fcode = str(a.get("code") or "")
@@ -562,7 +563,7 @@ async def trade_journal(limit: int = 80):
         except Exception:
             fq = None
         fcur = float((fq or {}).get("nav") or (fq or {}).get("est_nav") or 0)
-        acts = [x for x in await list_external_actions(a["id"])
+        acts = [x for x in await list_external_actions(a["id"], user_id=require_user_id())
                 if (x.get("status") or "confirmed") == "confirmed"]
         # 份额拆分调整: 每笔成交按其后所有拆分 价格÷F/份额×F, 与现价同标度 ——
         # 否则拆分前买入对现价会算出 -70% 假回撤喂给 AI 复盘, 轮次份额也对不上
@@ -654,7 +655,7 @@ async def trade_review_ai(period: str = "all", force: int = 0):
     from services import llm_client
 
     period = period if period in ("all", "day", "week", "month") else "all"
-    ck = f"trade_review_ai_{period}"
+    ck = (require_user_id(), f"trade_review_ai_{period}")
     if not force:
         c = _ai_review_cache.get(ck)
         if c and time.time() - c[1] < _AI_REVIEW_TTL:
@@ -1175,7 +1176,7 @@ async def benchmark_compare(symbol: str = "sh000300", days: int = 0):
     from database import get_db
     db = await get_db()
     try:
-        cursor = await db.execute("SELECT DISTINCT stock_code FROM position_actions")
+        cursor = await db.execute("SELECT DISTINCT stock_code FROM position_actions WHERE user_id = ?", (require_user_id(),))
         codes = [r[0] for r in await cursor.fetchall()]
     finally:
         await db.close()
@@ -1183,7 +1184,7 @@ async def benchmark_compare(symbol: str = "sh000300", days: int = 0):
 
     all_actions: list[dict] = []
     for code in a_codes:
-        all_actions.extend(await get_position_actions(code, limit=500))
+        all_actions.extend(await get_position_actions(code, limit=500, user_id=require_user_id()))
     all_actions.sort(key=lambda a: (a.get("trade_date") or "", a.get("id") or 0))
 
     # 2b) 场内 ETF: 记在外部资产表里, 但买卖行为跟个股没有区别(实时市价、按手成交)。
@@ -1192,14 +1193,14 @@ async def benchmark_compare(symbol: str = "sh000300", days: int = 0):
     #     现金、机器人不并: 那是另一种行为, 混进来对照不出「择时+选标的」这件事。
     from database import list_external_assets, list_external_actions
     from services.external_assets import _is_onchain_etf
-    etf_assets = [x for x in await list_external_assets()
+    etf_assets = [x for x in await list_external_assets(user_id=require_user_id())
                   if (x.get("asset_type") or "") == "FUND"
                   and _is_onchain_etf(str(x.get("code") or ""))]
     etf_flows: list[dict] = []          # 归一成 {date, cash, sign} —— cash 一律正数
     etf_splits: dict[str, list] = {}    # code → [(date, factor)]; 份额折算是按标的的, 不能全局套
     for x in etf_assets:
         code_e = str(x.get("code") or "")
-        for act in await list_external_actions(x["id"]):
+        for act in await list_external_actions(x["id"], user_id=require_user_id()):
             if (act.get("status") or "confirmed") != "confirmed":
                 continue
             t_e = (act.get("action_type") or "").upper()
@@ -1362,7 +1363,7 @@ async def benchmark_compare(symbol: str = "sh000300", days: int = 0):
             bench_shares_total -= f["cash"] / close
 
     # 4) 用户当前个股市值(港美股按实时汇率折人民币)
-    holdings = await get_all_holdings()
+    holdings = await get_all_holdings(user_id=require_user_id())
     a_holdings = [h for h in holdings if h.get("stock_code")]
     user_cur_mv = 0.0
     fx_cur_mv = 0.0
@@ -1471,7 +1472,7 @@ async def sector_concentration():
             "message": "..."
         }
     """
-    holdings = await get_all_holdings()
+    holdings = await get_all_holdings(user_id=require_user_id())
     holdings = [h for h in holdings if is_a_share(h["stock_code"])]
     if not holdings:
         return {"total_value": 0, "sectors": [], "max_concentration": 0, "level": "ok", "message": ""}
@@ -1555,7 +1556,7 @@ def _check_shares(stock_code: str, shares) -> None:
 async def create_holding(data: HoldingCreate):
     stock_code = normalize_stock_code(data.stock_code)
     _check_shares(stock_code, data.shares)
-    existing = await get_holding(stock_code)
+    existing = await get_holding(stock_code, user_id=require_user_id())
     # 还有持仓 → 真重复, 让用户走「加仓」。shares=0 的已清仓标的允许从这里重新建仓,
     # 复用原有交易历史 (FIFO 续上, 之前的已实现盈亏保留)。
     if existing and (existing.get("shares") or 0) > 0:
@@ -1567,12 +1568,12 @@ async def create_holding(data: HoldingCreate):
 
     # 1) 建持仓行 (已清仓标的的行还在, 不重复 INSERT, 顺手更新名字)
     if existing:
-        await update_holding(stock_code, stock_name=name)
+        await update_holding(stock_code, stock_name=name, user_id=require_user_id())
     else:
-        await add_holding(stock_code, name, data.shares, data.cost_price)
+        await add_holding(stock_code, name, data.shares, data.cost_price, user_id=require_user_id())
     # 1b) 如果前端传了券商, 在 recompute 之前写入, 这样 _recompute_holding 能用正确的费率
     if data.broker:
-        await update_holding(stock_code, broker=data.broker)
+        await update_holding(stock_code, broker=data.broker, user_id=require_user_id())
     # 2) 写一笔 BUY action,然后重算综合成本 (会自动加佣金/印花税/过户费)
     await add_position_action(
         stock_code, "BUY", data.cost_price, data.shares,
@@ -1581,6 +1582,7 @@ async def create_holding(data: HoldingCreate):
         trade_time=(data.trade_time or None),
         broker=(data.broker or None),
         fx_rate=await _trade_fx(stock_code, data.trade_date, data.fx_rate),
+        user_id=require_user_id(),
     )
     await _recompute_holding(stock_code)
     return {"message": "添加成功", "stock_code": stock_code, "stock_name": name}
@@ -1589,7 +1591,7 @@ async def create_holding(data: HoldingCreate):
 @router.put("/{stock_code}")
 async def modify_holding(stock_code: str, data: HoldingUpdate):
     stock_code = normalize_stock_code(stock_code)
-    existing = await get_holding(stock_code)
+    existing = await get_holding(stock_code, user_id=require_user_id())
     if not existing:
         raise HTTPException(404, f"持仓 {stock_code} 不存在")
 
@@ -1604,18 +1606,18 @@ async def modify_holding(stock_code: str, data: HoldingUpdate):
     if data.broker is not None:
         kwargs["broker"] = data.broker
 
-    await update_holding(stock_code, **kwargs)
+    await update_holding(stock_code, **kwargs, user_id=require_user_id())
     return {"message": "更新成功"}
 
 
 @router.delete("/{stock_code}")
 async def remove_holding(stock_code: str):
     stock_code = normalize_stock_code(stock_code)
-    existing = await get_holding(stock_code)
+    existing = await get_holding(stock_code, user_id=require_user_id())
     if not existing:
         raise HTTPException(404, f"持仓 {stock_code} 不存在")
 
-    await delete_holding(stock_code)
+    await delete_holding(stock_code, user_id=require_user_id())
     return {"message": "删除成功"}
 
 
@@ -1641,9 +1643,9 @@ async def list_actions(stock_code: str):
     """
     stock_code = normalize_stock_code(stock_code)
     from database import resolve_action_time
-    actions = await get_position_actions(stock_code, limit=500)
+    actions = await get_position_actions(stock_code, limit=500, user_id=require_user_id())
     is_a = stock_code and not stock_code.upper().startswith(("HK.", "US."))
-    h = await get_holding(stock_code)
+    h = await get_holding(stock_code, user_id=require_user_id())
     hb = (h or {}).get("broker") or await _default_broker_name()   # 未指定→持仓→配置默认, 让默认也有 tag
     resolve = await _broker_fee_resolver()
     # 估算费用走 _attach_auto_fees(内部按「委托单」合并 5 元最低佣金再分摊)。
@@ -1676,7 +1678,7 @@ async def create_action(stock_code: str, data: ActionCreate):
     历史 tranche 数据冻结保留, 新 action 一律不写 tranche_id.
     """
     stock_code = normalize_stock_code(stock_code)
-    holding = await get_holding(stock_code)
+    holding = await get_holding(stock_code, user_id=require_user_id())
     if not holding:
         raise HTTPException(404, f"持仓 {stock_code} 不存在")
     _check_shares(stock_code, data.shares)
@@ -1695,6 +1697,7 @@ async def create_action(stock_code: str, data: ActionCreate):
         trade_time=(data.trade_time or None),
         broker=(data.broker or None),
         fx_rate=None if is_split else await _trade_fx(stock_code, data.trade_date, data.fx_rate),
+        user_id=require_user_id(),
     )
     await _recompute_holding(stock_code)
     return {"message": "记录已添加"}
@@ -1708,11 +1711,13 @@ async def modify_action(action_id: int, data: ActionUpdate):
     from database import get_db
     db = await get_db()
     try:
-        cursor = await db.execute("SELECT * FROM position_actions WHERE id = ?", (action_id,))
+        cursor = await db.execute("SELECT * FROM position_actions WHERE id = ? AND user_id = ?", (action_id, require_user_id()))
         old = await cursor.fetchone()
     finally:
         await db.close()
-    old = dict(old) if old else {}
+    if old is None:
+        raise HTTPException(404, "交易记录不存在")
+    old = dict(old)
     if old:
         _check_shares(old.get("stock_code") or "", data.shares)
     fx_new = None
@@ -1735,6 +1740,7 @@ async def modify_action(action_id: int, data: ActionUpdate):
         trade_time=data.trade_time,
         broker=data.broker,
         fx_rate=fx_new,
+        user_id=require_user_id(),
     )
     if old:
         await _recompute_holding(old["stock_code"])
@@ -1747,11 +1753,13 @@ async def remove_action(action_id: int):
     from database import get_db
     db = await get_db()
     try:
-        cursor = await db.execute("SELECT stock_code FROM position_actions WHERE id = ?", (action_id,))
+        cursor = await db.execute("SELECT stock_code FROM position_actions WHERE id = ? AND user_id = ?", (action_id, require_user_id()))
         row = await cursor.fetchone()
     finally:
         await db.close()
-    await delete_position_action(action_id)
+    if row is None:
+        raise HTTPException(404, "交易记录不存在")
+    await delete_position_action(action_id, user_id=require_user_id())
     if row:
         await _recompute_holding(row["stock_code"])
     return {"message": "已删除"}

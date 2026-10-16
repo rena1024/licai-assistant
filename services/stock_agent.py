@@ -4,6 +4,7 @@ LLM 自己决定调哪些工具(查行情/走势/新闻/持仓/大盘情绪)拿�
 自由问答。硬规则: 仅做客观解读, 买卖/操作决策交给用户。
 """
 from __future__ import annotations
+from services.user_context import require_user_id
 import asyncio
 import base64 as _b64
 import json as _json
@@ -203,12 +204,12 @@ async def _active_holdings() -> list[dict]:
     from database import get_all_holdings, get_position_actions
     from services.position_ledger import ledger_state
     out = []
-    for h in await get_all_holdings():
+    for h in await get_all_holdings(user_id=require_user_id()):
         code = h.get("stock_code")
         shares = float(h.get("shares") or 0)
         hold_days = open_date = cost = div_ps = None
         try:
-            acts = await get_position_actions(code, limit=500)
+            acts = await get_position_actions(code, limit=500, user_id=require_user_id())
             if acts:
                 st = await ledger_state(code, acts, h.get("broker"))   # 费用/汇率口径同持仓列表, 含分红摊薄
                 shares = float(st.get("shares") or 0)
@@ -317,7 +318,7 @@ async def _tool_resolve_stock(query: str) -> dict:
     try:
         from database import list_external_assets
         held_hit, cleared_hit = None, None
-        for x in await list_external_assets():
+        for x in await list_external_assets(user_id=require_user_id()):
             nm = x.get("name") or ""
             cd = str(x.get("code") or "")
             if not (q == nm or (cd and q == cd) or (q in nm) or (cd and q in cd)):
@@ -339,7 +340,7 @@ async def _tool_resolve_stock(query: str) -> dict:
         pass
     # 1b) 持仓表里有但已清仓 → 能解析出代码, 但标记 in_holdings=False
     try:
-        for h in await get_all_holdings():
+        for h in await get_all_holdings(user_id=require_user_id()):
             nm = h.get("stock_name") or ""
             cd = h.get("stock_code") or ""
             if q == nm or q == cd or (q in nm) or (q in cd):
@@ -2301,9 +2302,9 @@ async def _tool_trades(code: str = "", start: str = "", end: str = "") -> dict:
 
     if code:
         bare = _norm_code(code)
-        acts = await get_position_actions(bare, limit=500)
+        acts = await get_position_actions(bare, limit=500, user_id=require_user_id())
         if not acts and normalize_stock_code(bare) != bare:      # hk00700 / 0700 写法 → 账本键 HK.00700
-            acts = await get_position_actions(normalize_stock_code(bare), limit=500)
+            acts = await get_position_actions(normalize_stock_code(bare), limit=500, user_id=require_user_id())
             if acts:
                 bare = normalize_stock_code(bare)
         if not acts:
@@ -2311,7 +2312,7 @@ async def _tool_trades(code: str = "", start: str = "", end: str = "") -> dict:
             try:
                 from database import list_external_assets, list_external_actions
                 q = (code or "").strip()
-                for a in await list_external_assets():
+                for a in await list_external_assets(user_id=require_user_id()):
                     ac, an = str(a.get("code") or ""), (a.get("name") or "")
                     atype = (a.get("asset_type") or "").upper()
                     # 按该资产自己的代码/名称匹配(q==bare 是自比恒真, 去掉; 否则任意基金都会误命中)
@@ -2322,7 +2323,7 @@ async def _tool_trades(code: str = "", start: str = "", end: str = "") -> dict:
                         from datetime import datetime as _dt
                         today_str = _dt.now().strftime("%Y-%m-%d")
                         # 按时间排序, 算每笔后的净份额余额(只计已确认), 让"卖了多少/还剩多少/占比"有准数, 不靠脑算
-                        allx = sorted(await list_external_actions(a["id"]),
+                        allx = sorted(await list_external_actions(a["id"], user_id=require_user_id()),
                                       key=lambda r: (act_date(r), r.get("id") or 0))
                         # 每笔之后发生的拆分因子之积: 拆分前的价/份额 折算到现行标度,
                         # 与现价直接可比(算均价/盈亏用调整后的数)
@@ -2408,7 +2409,7 @@ async def _tool_trades(code: str = "", start: str = "", end: str = "") -> dict:
             return {"code": bare, "trades": [], "note": "该标的无成交记录"}
         # 名称
         name = ""
-        for h in await get_all_holdings():
+        for h in await get_all_holdings(user_id=require_user_id()):
             if h.get("stock_code") == bare:
                 name = h.get("stock_name") or ""
                 break
@@ -2440,9 +2441,9 @@ async def _tool_trades(code: str = "", start: str = "", end: str = "") -> dict:
     # 无 code: 最近全部成交 —— 自己组装(个股 + 场内ETF + 场外基金), 含 pending(T+1待确认)申购, 标出来
     try:
         merged = []
-        name_by = {h.get("stock_code"): h.get("stock_name") for h in await get_all_holdings()}
+        name_by = {h.get("stock_code"): h.get("stock_name") for h in await get_all_holdings(user_id=require_user_id())}
         # A 股个股
-        for a in await get_position_actions(None, limit=200):
+        for a in await get_position_actions(None, limit=200, user_id=require_user_id()):
             d = (a.get("trade_date") or str(a.get("created_at") or ""))[:10]
             if not in_range(d):
                 continue
@@ -2457,11 +2458,11 @@ async def _tool_trades(code: str = "", start: str = "", end: str = "") -> dict:
         from database import list_external_assets, list_external_actions
         from services.external_assets import _is_onchain_etf
         fa = {"BUY": "买入", "ADD": "买入", "REDEEM": "卖出"}
-        for a in await list_external_assets():
+        for a in await list_external_assets(user_id=require_user_id()):
             if a.get("asset_type") != "FUND":
                 continue
             cls = "场内ETF" if _is_onchain_etf(str(a.get("code") or "")) else "场外基金"
-            for x in await list_external_actions(a["id"]):
+            for x in await list_external_actions(a["id"], user_id=require_user_id()):
                 act = fa.get((x.get("action_type") or "").upper())
                 d = act_date(x)
                 if not act or not in_range(d):
@@ -2481,8 +2482,8 @@ async def _tool_trades(code: str = "", start: str = "", end: str = "") -> dict:
                         "港股/美股行的 price/金额 是原币(见 币种), 汇总时用 金额(人民币,现汇率)。"
                         "来源=定投 的行是定投计划自动买入(策略性规律买入, 不是主观追高); 没这个标记的才是手动操作。"}
     except Exception:
-        acts = await get_position_actions(None, limit=40)
-        name_by = {h.get("stock_code"): h.get("stock_name") for h in await get_all_holdings()}
+        acts = await get_position_actions(None, limit=40, user_id=require_user_id())
+        name_by = {h.get("stock_code"): h.get("stock_name") for h in await get_all_holdings(user_id=require_user_id())}
         recs = [{**fmt(a), "code": a.get("stock_code"), "name": name_by.get(a.get("stock_code"), "")} for a in acts]
         return {"recent_trades": recs, "note": "最近成交(仅个股, 基金账本读取失败)。"}
 
@@ -2585,7 +2586,7 @@ async def _dca_plan_map() -> dict:
     try:
         from database import list_dca_schedules
         m: dict = {}
-        for p in await list_dca_schedules():
+        for p in await list_dca_schedules( user_id=require_user_id()):
             m.setdefault(p["asset_id"], []).append(_dca_desc(p))
         return {k: " / ".join(v) for k, v in m.items()}
     except Exception:
@@ -2622,7 +2623,7 @@ async def _tool_get_holdings() -> dict:
             from database import list_external_assets, list_external_actions
             from services.external_ledger import compute_external_state
             from services.external_assets import _is_onchain_etf
-            for x in await list_external_assets():
+            for x in await list_external_assets(user_id=require_user_id()):
                 at = x.get("asset_type")
                 sh = x.get("shares")
                 mv = x.get("manual_value")
@@ -2639,7 +2640,7 @@ async def _tool_get_holdings() -> dict:
                 # 直接给单价——盈亏 = (现价 − 摊薄成本) × 份额
                 if at in ("FUND", "CRYPTO") and sh and sh > 0:
                     try:
-                        st = compute_external_state(await list_external_actions(x["id"]), at)
+                        st = compute_external_state(await list_external_actions(x["id"], user_id=require_user_id()), at)
                         led_sh = st.get("shares") or 0
                         if led_sh > 0:
                             row["份额"] = round(led_sh, 2)
@@ -2677,7 +2678,7 @@ async def _tool_today_pnl() -> dict:
         from services.external_ledger import compute_external_state
         r = await today_pnl()
         day = _today_cst()
-        ext = {str(a.get("code") or ""): a for a in await list_external_assets()}
+        ext = {str(a.get("code") or ""): a for a in await list_external_assets(user_id=require_user_id())}
         rows, closed_sum = [], 0.0
         for it in r.get("items") or []:
             mkt = it.get("market") or "A"
@@ -2702,7 +2703,7 @@ async def _tool_today_pnl() -> dict:
             if (it.get("sold") or 0) > 0:
                 try:
                     if it.get("type") == "A":
-                        acts = await get_position_actions(it["code"], limit=1000)
+                        acts = await get_position_actions(it["code"], limit=1000, user_id=require_user_id())
                         before = [a for a in acts if (a.get("trade_date") or "")[:10] < day]
                         sa = await ledger_state(it["code"], acts, dilute=False)
                         sb = await ledger_state(it["code"], before, dilute=False)
@@ -2711,7 +2712,7 @@ async def _tool_today_pnl() -> dict:
                         cost_before = sb.get("cost_price")
                     else:
                         a0 = ext.get(str(it.get("code")))
-                        acts = [x for x in await list_external_actions(a0["id"]) if (x.get("status") or "confirmed") == "confirmed"]
+                        acts = [x for x in await list_external_actions(a0["id"], user_id=require_user_id()) if (x.get("status") or "confirmed") == "confirmed"]
                         before = [x for x in acts if str(x.get("trade_date") or "")[:10] < day]
                         sa = compute_external_state(acts, a0.get("asset_type"))
                         sb = compute_external_state(before, a0.get("asset_type"))

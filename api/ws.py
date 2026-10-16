@@ -1,5 +1,6 @@
 """WebSocket endpoint for real-time price push and alerts."""
 from __future__ import annotations
+from services.user_context import require_user_id
 import asyncio
 import json
 import time
@@ -79,7 +80,7 @@ async def price_monitor_loop():
                 await asyncio.sleep(5)
                 continue
 
-            holdings = await get_all_holdings()
+            holdings = await get_all_holdings(user_id=require_user_id())
             opened = markets_open()
             interval = _push_interval(opened, holdings)
             if not holdings:
@@ -295,10 +296,10 @@ async def dca_loop():
     async def _has_stale_pending(today: str) -> bool:
         """存在早于今天的 pending 流水 → 说明漏结算了(通常是 server 关着)。"""
         from database import list_external_assets, list_external_actions
-        for a in await list_external_assets():
+        for a in await list_external_assets(user_id=require_user_id()):
             if (a.get("asset_type") or "") != "FUND":
                 continue
-            for x in await list_external_actions(a["id"]):
+            for x in await list_external_actions(a["id"], user_id=require_user_id()):
                 if ((x.get("status") or "confirmed") == "pending"
                         and (x.get("action_type") or "").upper() in ("ADD", "BUY", "REDEEM", "SELL")
                         and (x.get("trade_date") or "")[:10] < today):

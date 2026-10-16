@@ -27,6 +27,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 from services.runtime_paths import get_runtime_paths
+from services.user_context import require_user_id
 
 _runtime = get_runtime_paths()
 DB_PATH = _runtime.db
@@ -151,13 +152,13 @@ async def seed_into(db_path: Path):
         for code, name, shares, cost, days_ago in DEMO_HOLDINGS:
             buy_date = (date.today() - timedelta(days=days_ago)).strftime("%Y-%m-%d")
             cost = (await _close_on(code, buy_date)) or cost
-            await add_holding(code, name, shares, cost)
+            await add_holding(code, name, shares, cost, user_id=require_user_id())
             await add_position_action(code, "BUY", cost, shares,
-                                      trade_date=buy_date, note="initial (demo)")
-            actions = await get_position_actions(code, limit=500)
+                                      trade_date=buy_date, note="initial (demo)", user_id=require_user_id())
+            actions = await get_position_actions(code, limit=500, user_id=require_user_id())
             state = compute_position_state(actions, stock_code=code)
             if state["shares"] > 0:
-                await update_holding(code, shares=state["shares"], cost_price=state["cost_price"])
+                await update_holding(code, shares=state["shares"], cost_price=state["cost_price"], user_id=require_user_id())
 
         # 外部资产(基金带日期回填的初始申购流水, 份额账本/净值曲线可用;
         # 申购价同样按建仓日真实净值/收盘取)
@@ -192,13 +193,14 @@ async def seed_into(db_path: Path):
                 note=a.get("note", ""),
                 annual_yield_rate=a.get("annual_yield_rate"),
                 start_date=a.get("start_date"),
+                user_id=require_user_id(),
             )
             if a.get("shares") and a.get("buy_days_ago"):
                 d0 = (date.today() - timedelta(days=a["buy_days_ago"])).strftime("%Y-%m-%d")
                 await add_external_action(
                     aid, "BUY", amount=cost_amount, shares=a["shares"],
                     unit_price=unit or round(cost_amount / a["shares"], 4),
-                    trade_date=d0, note="initial (demo)")
+                    trade_date=d0, note="initial (demo)", user_id=require_user_id())
         print(f"✓ 已写入 {len(DEMO_HOLDINGS)} 只 A股 + {len(DEMO_ASSETS)} 笔外部资产到 {db_path.name}")
     finally:
         _config.db_path = original_db
@@ -256,6 +258,8 @@ def main():
     p.add_argument("--peek", action="store_true",
                    help="(默认) 生成 portfolio.demo.db, 不动当前 DB")
     args = p.parse_args()
+    # 原脚本会删除／替换整个账号数据库；不能用匿名演示流程清空已有 owner。
+    p.error('账号版本暂不支持整库演示切换／还原；请使用独立测试目录和已登录账号录入合成数据')
 
     if args.use:
         cmd_use()

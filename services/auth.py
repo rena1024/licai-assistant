@@ -13,6 +13,7 @@ from starlette.responses import JSONResponse
 
 from database import get_db
 from services import accounts, audit
+from services.user_context import user_scope
 
 COOKIE_NAME = "licai_session"
 SESSION_TTL = 30 * 86400
@@ -165,7 +166,8 @@ class AuthenticationMiddleware(BaseHTTPMiddleware):
                 return JSONResponse({"detail": {"code": exc.code, "message": str(exc)}}, status_code=exc.status_code, headers={"Cache-Control": "no-store"})
             except HTTPException as exc:
                 return JSONResponse({"detail": exc.detail}, status_code=exc.status_code, headers={"Cache-Control": "no-store"})
-            response = await call_next(request)
+            with user_scope(session.context.user_id):
+                response = await call_next(request)
             response.headers["Cache-Control"] = "no-store"
             return response
         response = await call_next(request)

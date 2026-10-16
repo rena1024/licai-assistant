@@ -3,6 +3,7 @@
 每个计划绑一个 asset_id, 按 day_of_month 每月触发一次, 写 pending ADD action.
 """
 from __future__ import annotations
+from services.user_context import require_user_id
 from datetime import date
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
@@ -60,13 +61,13 @@ def _validate_day_of_week(day: int):
 
 @router.get("")
 async def list_all(asset_id: Optional[int] = None):
-    rows = await list_dca_schedules(asset_id)
+    rows = await list_dca_schedules(asset_id, user_id=require_user_id())
     return {"schedules": rows, "count": len(rows)}
 
 
 @router.get("/{dca_id}")
 async def get_one(dca_id: int):
-    row = await get_dca_schedule(dca_id)
+    row = await get_dca_schedule(dca_id, user_id=require_user_id())
     if not row:
         raise HTTPException(404, "not found")
     return row
@@ -74,7 +75,7 @@ async def get_one(dca_id: int):
 
 @router.post("")
 async def create(data: DCACreate):
-    asset = await get_external_asset(data.asset_id)
+    asset = await get_external_asset(data.asset_id, user_id=require_user_id())
     if not asset:
         raise HTTPException(404, "asset not found")
     if asset["asset_type"] not in ("FUND", "CRYPTO"):
@@ -98,13 +99,14 @@ async def create(data: DCACreate):
         frequency=data.frequency,
         day_of_month=data.day_of_month, day_of_week=data.day_of_week,
         next_due=next_due, note=data.note or "",
+        user_id=require_user_id(),
     )
     return {"message": "added", "id": new_id, "next_due": next_due}
 
 
 @router.put("/{dca_id}")
 async def update(dca_id: int, data: DCAUpdate):
-    existing = await get_dca_schedule(dca_id)
+    existing = await get_dca_schedule(dca_id, user_id=require_user_id())
     if not existing:
         raise HTTPException(404, "not found")
     payload = data.model_dump(exclude_unset=True)
@@ -123,7 +125,7 @@ async def update(dca_id: int, data: DCAUpdate):
     # 改了 frequency / day → 自动重算 next_due (除非用户也手动指定)
     if ("frequency" in payload or "day_of_month" in payload or "day_of_week" in payload) and "next_due" not in payload:
         merged = {**existing, **payload}
-        asset = await get_external_asset(existing["asset_id"])
+        asset = await get_external_asset(existing["asset_id"], user_id=require_user_id())
         market = _market_of_asset_name((asset or {}).get("name") or "")
         payload["next_due"] = initial_next_due(
             merged.get("frequency") or "monthly",
@@ -132,13 +134,13 @@ async def update(dca_id: int, data: DCAUpdate):
             market=market,
         )
     if payload:
-        await update_dca_schedule(dca_id, **payload)
+        await update_dca_schedule(dca_id, **payload, user_id=require_user_id())
     return {"message": "updated"}
 
 
 @router.delete("/{dca_id}")
 async def remove(dca_id: int):
-    await delete_dca_schedule(dca_id)
+    await delete_dca_schedule(dca_id, user_id=require_user_id())
     return {"message": "deleted"}
 
 

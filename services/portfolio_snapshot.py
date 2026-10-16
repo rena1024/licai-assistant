@@ -5,6 +5,7 @@
 key: A股="A:<code>", 外部资产="EXT:<id>"。
 """
 from __future__ import annotations
+from services.user_context import require_user_id
 
 import json
 from datetime import datetime, timedelta, timezone
@@ -42,7 +43,7 @@ async def take_snapshot() -> dict | None:
     total = round(sum(by.values()), 2)
     snap_date = _bj_now().strftime("%Y-%m-%d")
     from database import save_portfolio_snapshot
-    await save_portfolio_snapshot(snap_date, total, json.dumps(by, ensure_ascii=False))
+    await save_portfolio_snapshot(snap_date, total, json.dumps(by, ensure_ascii=False), user_id=require_user_id())
     return {"snap_date": snap_date, "total_value": total, "assets": len(by)}
 
 
@@ -81,7 +82,7 @@ async def maybe_snapshot() -> None:
     if now.hour * 60 + now.minute < 15 * 60 + 5:
         return
     from database import list_portfolio_snapshots
-    rows = await list_portfolio_snapshots(limit=1)
+    rows = await list_portfolio_snapshots(limit=1, user_id=require_user_id())
     today = now.strftime("%Y-%m-%d")
     if rows and rows[0]["snap_date"] == today:
         if now.hour * 60 + now.minute < _HK_REFRESH_AT or _hk_refreshed == today:
@@ -107,7 +108,7 @@ async def snapshot_map() -> dict:
     """{date: {key: value}} 供净值曲线覆盖成本基线。"""
     from database import list_portfolio_snapshots
     out: dict[str, dict] = {}
-    for r in await list_portfolio_snapshots(limit=730):
+    for r in await list_portfolio_snapshots(limit=730, user_id=require_user_id()):
         try:
             out[r["snap_date"]] = json.loads(r["by_asset"] or "{}")
         except Exception:

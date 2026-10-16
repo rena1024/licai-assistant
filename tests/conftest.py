@@ -106,3 +106,11 @@ def authenticated_client():
     client.headers["X-CSRF-Token"] = result.json()["csrf_token"]
     yield client
     client.close()
+
+
+@pytest.fixture(autouse=True)
+def synthetic_service_identity():
+    """旧服务单元测试显式运行在合成身份中；生产路径没有此默认值。"""
+    from services.user_context import user_scope
+    with user_scope(1):
+        yield

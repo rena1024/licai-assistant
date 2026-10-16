@@ -14,6 +14,7 @@
   来自插件的离线校准, 与你的结果并排给出。ETF 不适用这套个股统计。
 """
 from __future__ import annotations
+from services.user_context import require_user_id
 
 import asyncio
 import statistics
@@ -50,9 +51,9 @@ async def _decisions() -> list[dict]:
     from services.market_data import _is_etf_lof, split_stock_code
     from services.position_ledger import ACQUIRE
 
-    names = {h["stock_code"]: h.get("stock_name") or "" for h in await get_all_holdings()}
+    names = {h["stock_code"]: h.get("stock_name") or "" for h in await get_all_holdings(user_id=require_user_id())}
     raw = []
-    for a in await get_position_actions(None, limit=100000):
+    for a in await get_position_actions(None, limit=100000, user_id=require_user_id()):
         # 港美股同在这本账里, 但结果以中证1000为基准算超额、形态统计也是 A 股校准的, 只收 A 股
         if split_stock_code(a.get("stock_code") or "")[0] != "A":
             continue
@@ -67,7 +68,7 @@ async def _decisions() -> list[dict]:
             if asset.get("asset_type") != "FUND" or not _is_etf_lof(code):
                 continue
             names.setdefault(code, asset.get("name") or "")
-            acts = [x for x in await list_external_actions(asset["id"]) if (x.get("status") or "confirmed") == "confirmed"]
+            acts = [x for x in await list_external_actions(asset["id"], user_id=require_user_id()) if (x.get("status") or "confirmed") == "confirmed"]
             # 份额拆分(SPLIT 行, shares = 拆分倍数): 流水里是拆分前的真实成交价, 前复权 K 线是拆分后标度
             splits = [(str(x.get("trade_date") or "")[:10], float(x.get("shares") or 0))
                       for x in acts if (x.get("action_type") or "").upper() == "SPLIT" and float(x.get("shares") or 0) > 0]
@@ -192,7 +193,7 @@ def _highlights(total: dict, price_groups: list, risk_groups: list, stock_rows: 
 
 
 async def build(force: bool = False) -> dict:
-    ck = "all"
+    ck = (require_user_id(), "all")
     c = _cache.get(ck)
     if c and not force and time.time() - c[1] < _TTL:
         return c[0]

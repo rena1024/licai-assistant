@@ -24,6 +24,8 @@ def temp_db(monkeypatch):
     monkeypatch.setattr("config.config.db_path", path)
     from database import init_db
     asyncio.run(init_db())
+    from tests.portfolio_fixtures import seed_business_owner
+    seed_business_owner(path)
     yield path
     os.unlink(path)
 
@@ -33,8 +35,7 @@ def _seed(path):
     try:
         # 8-20 建仓两只, 8-25 清掉黄金那只(卖出在 as_of 之后就不该影响 8-24 的结果)
         con.executemany(
-            "INSERT INTO position_actions (stock_code, action_type, price, shares, trade_date) "
-            "VALUES (?,?,?,?,?)",
+            'INSERT INTO position_actions (user_id, stock_code, action_type, price, shares, trade_date) VALUES (1, ?,?,?,?,?)',
             [("600547", "BUY", 36.0, 700, "2026-08-20"),
              ("000426", "BUY", 41.0, 600, "2026-08-20"),
              ("600547", "SELL", 34.7, 700, "2026-08-25")])
@@ -44,10 +45,9 @@ def _seed(path):
             [("600547", "2026-08-24", 36, 37, 35, 36.5, 1, 1),
              ("600547", "2026-08-22", 36, 37, 35, 36.0, 1, 1),
              ("000426", "2026-08-24", 40, 42, 40, 41.5, 1, 1)])
-        con.execute("INSERT INTO external_assets (id, name, asset_type, code, cost_amount, shares) "
-                    "VALUES (?,?,?,?,?,?)",
+        con.execute('INSERT INTO external_assets (user_id, id, name, asset_type, code, cost_amount, shares) VALUES (1, ?,?,?,?,?,?)',
                     (7, "华夏黄金ETF联接C", "FUND", "008701", 6000.0, 2300.0))
-        con.execute("INSERT INTO portfolio_snapshots (snap_date, total_value, by_asset) VALUES (?,?,?)",
+        con.execute('INSERT INTO portfolio_snapshots (user_id, snap_date, total_value, by_asset) VALUES (1, ?,?,?)',
                     ("2026-08-24", 60000.0, '{"A:600547": 99999.0, "EXT:7": 5000.0}'))
         con.commit()
     finally:
@@ -97,8 +97,7 @@ def test_stock_without_any_close_is_reported_not_silently_dropped(temp_db):
     """一只票在缓存里一根日线都没有 → 不计入, 但要在 basis 里报出来(不然总资产悄悄少一块)。"""
     _seed(temp_db)
     con = sqlite3.connect(temp_db)
-    con.execute("INSERT INTO position_actions (stock_code, action_type, price, shares, trade_date) "
-                "VALUES ('601869','BUY',369.0,100,'2026-08-20')")
+    con.execute("INSERT INTO position_actions (user_id, stock_code, action_type, price, shares, trade_date) VALUES (1, '601869','BUY',369.0,100,'2026-08-20')")
     con.commit(); con.close()
     stocks, _, _, basis = _run(day="2026-08-24")
     assert "601869" not in {s["code"] for s in stocks}

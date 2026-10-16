@@ -1,5 +1,6 @@
 """Sector radar endpoints."""
 from __future__ import annotations
+from services.user_context import require_user_id
 import asyncio
 import hashlib
 import json as _json
@@ -29,7 +30,7 @@ async def compare_one(stock_code: str, force: bool = False):
 
 @router.get("/compare-all")
 async def compare_all(force: bool = False):
-    holdings = await get_all_holdings()
+    holdings = await get_all_holdings(user_id=require_user_id())
     # 只比当前真持仓 (shares>0): 已清仓的票不该出现在板块雷达里
     holdings = [h for h in holdings
                 if is_a_share(h["stock_code"]) and float(h.get("shares") or 0) > 0]
@@ -61,7 +62,7 @@ _trend_cache: dict = {}
 async def sector_trend_ai(days: int = 10, force: bool = False):
     """基于量化矩阵的板块趋势 AI 分析: 走强/退潮/轮动/资金流向 + 跟持仓关系。纯客观, 不给买卖建议。"""
     import time as _t
-    ck = f"trend_{days}"
+    ck = (require_user_id(), f"trend_{days}")
     c = _trend_cache.get(ck)
     if not force and c and _t.time() - c[1] < 1800:
         return c[0]
@@ -73,7 +74,7 @@ async def sector_trend_ai(days: int = 10, force: bool = False):
 
     # 用户持仓所在的 A 股板块(二级), 让 AI 点出跟持仓的关系
     from services.market_data import get_stock_sector_detail
-    held = [h for h in await get_all_holdings() if is_a_share(h["stock_code"]) and float(h.get("shares") or 0) > 0]
+    held = [h for h in await get_all_holdings(user_id=require_user_id()) if is_a_share(h["stock_code"]) and float(h.get("shares") or 0) > 0]
     held_secs = set()
     for h in held:
         try:
@@ -177,13 +178,13 @@ async def sector_kline(market: str = "A", key: str = "", days: int = 60):
 async def scan(force: bool = False):
     """A 股全板块扫描: 90 个 THS 板块的 1d/5d/30d 涨幅 + 持仓标记 + 兜底 ETF.
     持仓标记同时考虑 A 股个股 + 行业 ETF (基金持仓里名字带 ETF 的)。"""
-    holdings = await get_all_holdings()
+    holdings = await get_all_holdings(user_id=require_user_id())
     # 只算当前真持仓 (shares>0): 已清仓的票不该再标 held
     held_codes = [h["stock_code"] for h in holdings
                   if is_a_share(h["stock_code"]) and float(h.get("shares") or 0) > 0] if holdings else []
     # 行业 ETF: 从外部资产里捞持有中 (shares>0) 且名字带 ETF 的基金, 名字用于映射板块
     from database import list_external_assets
-    assets = await list_external_assets()
+    assets = await list_external_assets(user_id=require_user_id())
     etf_names = [a.get("name") or "" for a in (assets or [])
                  if a.get("asset_type") == "FUND" and float(a.get("shares") or 0) > 0
                  and "ETF" in (a.get("name") or "")]
@@ -193,7 +194,7 @@ async def scan(force: bool = False):
 @router.get("/scan-us")
 async def scan_us(force: bool = False):
     """美股板块扫描: 11 个 GICS 板块 (SPDR Sector ETFs)."""
-    holdings = await get_all_holdings()
+    holdings = await get_all_holdings(user_id=require_user_id())
     held_codes = [h["stock_code"] for h in holdings
                   if str(h.get("stock_code", "")).upper().startswith("US.") and float(h.get("shares") or 0) > 0] if holdings else []
     return await scan_us_sectors(held_codes, force=force)
@@ -202,7 +203,7 @@ async def scan_us(force: bool = False):
 @router.get("/scan-hk")
 async def scan_hk(force: bool = False):
     """港股板块扫描: 12 个恒生综合行业指数."""
-    holdings = await get_all_holdings()
+    holdings = await get_all_holdings(user_id=require_user_id())
     held_codes = [h["stock_code"] for h in holdings
                   if str(h.get("stock_code", "")).upper().startswith("HK.") and float(h.get("shares") or 0) > 0] if holdings else []
     return await scan_hk_sectors(held_codes, force=force)
@@ -237,7 +238,7 @@ _MARKET_CN = {"A": "A股", "HK": "港股", "US": "美股"}
 @router.post("/why")
 async def sector_why(data: WhyIn):
     hour = _dt.now().strftime("%Y-%m-%d-%H")
-    key = hashlib.sha1(f"{data.market}|{data.name}|{hour}".encode("utf-8")).hexdigest()
+    key = hashlib.sha1(f"{require_user_id()}|{data.market}|{data.name}|{hour}".encode("utf-8")).hexdigest()
     if key in _WHY_CACHE:
         return {**_WHY_CACHE[key], "cached": True}
     try:
@@ -247,7 +248,7 @@ async def sector_why(data: WhyIn):
         heads = []
     news_block = "\n".join(f"- {h}" for h in heads if h) or "(近期无可用快讯)"
     try:
-        holdings = [h for h in await get_all_holdings() if float(h.get("shares") or 0) > 0]
+        holdings = [h for h in await get_all_holdings(user_id=require_user_id()) if float(h.get("shares") or 0) > 0]
         hold_desc = ", ".join(f"{h['stock_code']}({h.get('stock_name','')})" for h in holdings) or "(无持仓信息)"
     except Exception:
         hold_desc = "(无持仓信息)"

@@ -125,7 +125,7 @@ def test_recovery_revokes_sessions_and_preserves_business_data(account_db):
         admin, _ = await bootstrap()
         user = await accounts.create_user(actor_id=admin.id, username="UserA", password=PASSWORD, now=NOW)
         with sqlite3.connect(account_db) as db:
-            db.execute("INSERT INTO holdings (stock_code, shares, cost_price) VALUES ('FAKE', 2, 3)")
+            db.execute("INSERT INTO holdings (user_id, stock_code, shares, cost_price) VALUES (1, 'FAKE', 2, 3)")
             for owner, tag in ((admin.id, "device-a"), (admin.id, "device-b"), (user.id, "other-device")):
                 db.execute(
                     "INSERT INTO sessions (session_id, token_hash, user_id, auth_version, created_at, expires_at) VALUES (?, ?, ?, 1, ?, ?)",
@@ -358,7 +358,7 @@ def test_cli_recovery_does_not_run_business_migrations(account_db, monkeypatch):
 
     asyncio.run(bootstrap())
     with sqlite3.connect(account_db) as db:
-        db.execute("INSERT INTO holdings (stock_code, shares, cost_price) VALUES ('SYNTHETIC', 2, 3)")
+        db.execute("INSERT INTO holdings (user_id, stock_code, shares, cost_price) VALUES (1, 'SYNTHETIC', 2, 3)")
     original_actions = rows(account_db, "SELECT * FROM position_actions")
     monkeypatch.setattr(sys.stdin, "isatty", lambda: True)
     monkeypatch.setattr(sys.stderr, "isatty", lambda: True)

@@ -1,5 +1,6 @@
 """External assets (funds / crypto / bots) REST endpoints."""
 from __future__ import annotations
+from services.user_context import require_user_id
 import asyncio
 from typing import Optional
 from fastapi import APIRouter, HTTPException
@@ -137,7 +138,7 @@ async def _maybe_sync_etf_split(asset: dict) -> bool:
     if not hit:
         return False
     split_date, factor = hit
-    actions = await list_external_actions(asset["id"])
+    actions = await list_external_actions(asset["id"], user_id=require_user_id())
     # 幂等: 该拆分日已记过 SPLIT 不重复; 拆分日前没有任何买入 lot(纯拆分后建仓)也无需入账
     if any((a.get("action_type") or "").upper() == "SPLIT"
            and str(a.get("trade_date") or "")[:10] == split_date for a in actions):
@@ -148,11 +149,11 @@ async def _maybe_sync_etf_split(asset: dict) -> bool:
         return False
     await add_external_action(asset["id"], "SPLIT", amount=0, shares=factor,
                               trade_date=split_date,
-                              note=f"份额拆分 1:{factor:g} (raw/qfq 日K检测, 自动同步)")
+                              note=f"份额拆分 1:{factor:g} (raw/qfq 日K检测, 自动同步)", user_id=require_user_id())
     # 行缓存列同步(current_value 等读的是 row.shares, 与 modify_asset 同一套约定)
-    actions = await list_external_actions(asset["id"])
+    actions = await list_external_actions(asset["id"], user_id=require_user_id())
     state = compute_external_state(actions, "FUND")
-    await update_external_asset(asset["id"], shares=state["shares"], cost_amount=state["cost_amount"])
+    await update_external_asset(asset["id"], shares=state["shares"], cost_amount=state["cost_amount"], user_id=require_user_id())
     asset["shares"] = state["shares"]; asset["cost_amount"] = state["cost_amount"]
     print(f"[split-sync] {code} {asset.get('name')}: 份额拆分 1:{factor:g} @ {split_date} 已入账, 份额 {state['shares']:g}")
     return True
@@ -175,7 +176,7 @@ async def _enrich(asset: dict) -> dict:
     total_released = 0.0
     if t != "BOT":
         try:
-            actions = await list_external_actions(asset["id"])
+            actions = await list_external_actions(asset["id"], user_id=require_user_id())
             if actions:
                 pending_count = sum(1 for a in actions if (a.get("status") or "confirmed") == "pending")
                 # 派生 pending_amount: 实时从 pending 状态的申购流水累加, 避免 DB 字段 stale.
@@ -414,7 +415,7 @@ async def _enrich(asset: dict) -> dict:
 @router.get("")
 async def list_assets():
     """List all external assets with current values enriched."""
-    rows = await list_external_assets()
+    rows = await list_external_assets(user_id=require_user_id())
     enriched = await asyncio.gather(*[_enrich(r) for r in rows])
 
     # 场内 ETF 未设券商时, 显示回退到配置默认券商(与 A股 一致, 让默认也有 tag)
@@ -468,14 +469,14 @@ async def assets_realized():
 
     BOT 跳过 (走 OKX, 不在本地 ledger).
     """
-    rows = await list_external_assets()
+    rows = await list_external_assets(user_id=require_user_id())
     items: list[dict] = []
     total = 0.0
     for a in rows:
         t = a.get("asset_type") or ""
         if t == "BOT":
             continue
-        actions = await list_external_actions(a["id"])
+        actions = await list_external_actions(a["id"], user_id=require_user_id())
         if not actions:
             continue
         state = compute_external_state(actions, t)
@@ -494,7 +495,7 @@ async def assets_realized():
         })
     # 已平仓归档的(BOT/策略止损结束等): closed_realized 是平仓时定格的已实现盈亏
     from database import list_closed_external_assets
-    for a in await list_closed_external_assets():
+    for a in await list_closed_external_assets(user_id=require_user_id()):
         rp = float(a.get("closed_realized") or 0)
         total += rp
         items.append({
@@ -513,7 +514,7 @@ async def close_asset(asset_id: int):
     主要用于 OKX 策略止损/正常结束后归档。"""
     from database import get_external_asset, close_external_asset
     from datetime import datetime, timezone, timedelta
-    asset = await get_external_asset(asset_id)
+    asset = await get_external_asset(asset_id, user_id=require_user_id())
     if not asset:
         raise HTTPException(404, "资产不存在")
     enriched = await _enrich(asset)
@@ -521,7 +522,7 @@ async def close_asset(asset_id: int):
     cost = float(enriched.get("cost_amount") or 0)
     realized = round(cur_val - cost, 2)   # 平仓时定格的盈亏(CNY)
     today = (datetime.now(timezone.utc) + timedelta(hours=8)).strftime("%Y-%m-%d")
-    await close_external_asset(asset_id, realized, today)
+    await close_external_asset(asset_id, realized, today, user_id=require_user_id())
     return {"ok": True, "asset_id": asset_id, "name": asset.get("name"),
             "closed_realized": realized, "closed_date": today,
             "note": "已平仓归档: 退出在持, 该盈亏已转入已实现。"}
@@ -551,7 +552,7 @@ async def create_asset(data: AssetCreate):
     # 已清仓(shares=0)但有历史的也合并(等于复活续上同一条流水)。合并后沿用原记录的券商(场内ETF券商记在资产行上)。
     merge_target = None
     if data.asset_type in ("FUND", "CRYPTO") and data.code:
-        for ex in (await list_external_assets()):
+        for ex in (await list_external_assets(user_id=require_user_id())):
             if (ex.get("asset_type") == data.asset_type
                     and (ex.get("code") or "") == data.code):
                 merge_target = ex
@@ -576,6 +577,7 @@ async def create_asset(data: AssetCreate):
             pending_amount=effective_pending,
             purchase_fee_rate=data.purchase_fee_rate,
             broker=data.broker,
+            user_id=require_user_id(),
         )
     # 写购买 action 进 ledger (BOT 不入账, 走 OKX 同步); 合并时标 add-lot, 新建标 initial
     if data.asset_type != "BOT" and data.cost_amount and data.cost_amount > 0:
@@ -601,11 +603,12 @@ async def create_asset(data: AssetCreate):
             status="pending" if is_pending_fund else "confirmed",
             fee=seed_fee if seed_fee > 0 else None,
             trade_time=(data.trade_time or None),
+            user_id=require_user_id(),
         )
 
     # 合并: 追加流水后按全部 action 重算已有持仓的 cost/shares (新建已由 add_external_asset 设好)
     if merge_target:
-        acts = await list_external_actions(aid)
+        acts = await list_external_actions(aid, user_id=require_user_id())
         state = compute_external_state(acts, data.asset_type)
         upd = {"cost_amount": state["cost_amount"]}
         if data.asset_type in ("FUND", "CRYPTO"):
@@ -613,7 +616,7 @@ async def create_asset(data: AssetCreate):
         # 已有没设申购费率而这次填了 → 补上
         if merge_target.get("purchase_fee_rate") is None and data.purchase_fee_rate is not None:
             upd["purchase_fee_rate"] = data.purchase_fee_rate
-        await update_external_asset(aid, **upd)
+        await update_external_asset(aid, **upd, user_id=require_user_id())
 
     # 顺便创建定投计划 (FUND/CRYPTO only)
     dca_created_id = None
@@ -638,6 +641,7 @@ async def create_asset(data: AssetCreate):
             asset_id=aid, mode=d.mode, value=d.value, frequency=d.frequency,
             day_of_month=d.day_of_month, day_of_week=d.day_of_week,
             next_due=next_due, note=d.note or "",
+            user_id=require_user_id(),
         )
     return {
         "message": "merged" if merge_target else "added", "id": aid,
@@ -654,8 +658,8 @@ class MergeFrom(BaseModel):
 @router.post("/{asset_id}/merge-from")
 async def merge_assets(asset_id: int, data: MergeFrom):
     """把 source_id 的流水并入 asset_id, 重算, 删掉空壳 source。只允许同类型+同代码。"""
-    target = await get_external_asset(asset_id)
-    source = await get_external_asset(data.source_id)
+    target = await get_external_asset(asset_id, user_id=require_user_id())
+    source = await get_external_asset(data.source_id, user_id=require_user_id())
     if not target or not source:
         raise HTTPException(404, "asset not found")
     if asset_id == data.source_id:
@@ -663,16 +667,16 @@ async def merge_assets(asset_id: int, data: MergeFrom):
     if target.get("asset_type") != source.get("asset_type") or (target.get("code") or "") != (source.get("code") or ""):
         raise HTTPException(400, "只能合并同类型+同代码的资产")
 
-    moved = await reassign_external_actions(data.source_id, asset_id)
-    acts = await list_external_actions(asset_id)
+    moved = await reassign_external_actions(data.source_id, asset_id, user_id=require_user_id())
+    acts = await list_external_actions(asset_id, user_id=require_user_id())
     state = compute_external_state(acts, target["asset_type"])
     upd: dict = {"cost_amount": state["cost_amount"]}
     if target["asset_type"] in ("FUND", "CRYPTO"):
         upd["shares"] = state["shares"]
     if target.get("purchase_fee_rate") is None and source.get("purchase_fee_rate") is not None:
         upd["purchase_fee_rate"] = source.get("purchase_fee_rate")
-    await update_external_asset(asset_id, **upd)
-    await delete_external_asset(data.source_id)
+    await update_external_asset(asset_id, **upd, user_id=require_user_id())
+    await delete_external_asset(data.source_id, user_id=require_user_id())
     return {
         "merged_into": asset_id, "deleted": data.source_id, "moved_actions": moved,
         "shares": state["shares"], "cost_amount": state["cost_amount"],
@@ -689,11 +693,13 @@ async def modify_asset(asset_id: int, data: AssetUpdate):
     # FUND/CRYPTO 的 shares/cost_amount 由 ledger 推算 → 直接改 row 不会生效
     # (会被 _enrich 的 ledger overlay 覆盖). 把变更转成一条 ADD / REDEEM 调整 action
     # 写进流水, 让 ledger 跟用户的编辑保持一致.
-    asset = await get_external_asset(asset_id)
-    if asset and asset.get("asset_type") in ("FUND", "CRYPTO") and (
+    asset = await get_external_asset(asset_id, user_id=require_user_id())
+    if asset is None:
+        raise HTTPException(404, "资产不存在")
+    if asset.get("asset_type") in ("FUND", "CRYPTO") and (
         "shares" in payload or "cost_amount" in payload
     ):
-        actions = await list_external_actions(asset_id)
+        actions = await list_external_actions(asset_id, user_id=require_user_id())
         state = compute_external_state(actions, asset["asset_type"])
         old_shares = float(state.get("shares") or 0)
         old_cost = float(state.get("cost_amount") or 0)
@@ -711,6 +717,7 @@ async def modify_asset(asset_id: int, data: AssetUpdate):
                 asset_id, "ADD",
                 amount=max(d_cost, 0), shares=d_shares, unit_price=unit,
                 trade_date=today, note="adjust (from edit)",
+                user_id=require_user_id(),
             )
         elif d_shares < -1e-6:
             amt = max(abs(d_cost), 0)
@@ -719,6 +726,7 @@ async def modify_asset(asset_id: int, data: AssetUpdate):
                 asset_id, "REDEEM",
                 amount=amt, shares=abs(d_shares), unit_price=unit,
                 trade_date=today, note="adjust (from edit)",
+                user_id=require_user_id(),
             )
         elif abs(d_cost) > 0.5:
             # 份额没变只动了成本 (>0.5 元才算真改, 否则是单价4位小数的舍入噪声):
@@ -727,21 +735,23 @@ async def modify_asset(asset_id: int, data: AssetUpdate):
                 await add_external_action(
                     asset_id, "INTEREST",
                     amount=d_cost, trade_date=today, note="adjust (cost up)",
+                    user_id=require_user_id(),
                 )
             else:
                 # 成本减少不太常见, 记一笔同名调整避免污染 INTEREST
                 await add_external_action(
                     asset_id, "DIVIDEND",
                     amount=d_cost, trade_date=today, note="adjust (cost down)",
+                    user_id=require_user_id(),
                 )
         # 重新算 ledger 状态, 同步到 row 缓存
-        actions = await list_external_actions(asset_id)
+        actions = await list_external_actions(asset_id, user_id=require_user_id())
         state = compute_external_state(actions, asset["asset_type"])
         payload["shares"] = state["shares"]
         payload["cost_amount"] = state["cost_amount"]
 
     if payload:
-        await update_external_asset(asset_id, **payload)
+        await update_external_asset(asset_id, **payload, user_id=require_user_id())
     return {"message": "updated"}
 
 
@@ -754,7 +764,7 @@ async def add_lot(asset_id: int, data: LotAdd):
     """
     from datetime import date as _date, datetime as _dt, timedelta as _td
 
-    asset = await get_external_asset(asset_id)
+    asset = await get_external_asset(asset_id, user_id=require_user_id())
     if not asset:
         raise HTTPException(404, "asset not found")
     t = asset["asset_type"]
@@ -817,7 +827,7 @@ async def add_lot(asset_id: int, data: LotAdd):
         # If user wants WEALTH manual_value cleared (since principal changed),
         # they can edit later. We leave it alone.
 
-    await update_external_asset(asset_id, **payload)
+    await update_external_asset(asset_id, **payload, user_id=require_user_id())
 
     # 写流水. OTC 基金 pending 模式 (只填本金) 也写一条 status=pending,
     # T+1 净值出来后用户在流水里"确认"补 shares/unit_price.
@@ -852,6 +862,7 @@ async def add_lot(asset_id: int, data: LotAdd):
         status=status,
         fee=fee if fee > 0 else None,
         trade_time=(data.trade_time or None),
+        user_id=require_user_id(),
     )
     return {"message": "lot added", "new_state": payload, "status": status}
 
@@ -881,7 +892,7 @@ async def reduce_lot(asset_id: int, data: LotReduce):
     ETF/CRYPTO: 必须 amount > 0 + 能定 shares, 直接 confirmed.
     WEALTH/CASH: amount 即可, 直接 confirmed.
     """
-    asset = await get_external_asset(asset_id)
+    asset = await get_external_asset(asset_id, user_id=require_user_id())
     if not asset:
         raise HTTPException(404, "asset not found")
     t = asset["asset_type"]
@@ -933,16 +944,17 @@ async def reduce_lot(asset_id: int, data: LotReduce):
             else None
         ),
         trade_time=(data.trade_time or None),
+        user_id=require_user_id(),
     )
 
     # 只有 confirmed 才同步缓存
     if status == "confirmed":
-        actions = await list_external_actions(asset_id)
+        actions = await list_external_actions(asset_id, user_id=require_user_id())
         state = compute_external_state(actions, t)
         sync: dict = {"cost_amount": state["cost_amount"]}
         if t in ("FUND", "CRYPTO"):
             sync["shares"] = state["shares"]
-        await update_external_asset(asset_id, **sync)
+        await update_external_asset(asset_id, **sync, user_id=require_user_id())
         return {
             "message": "reduced",
             "status": status,
@@ -963,13 +975,13 @@ class ConfirmAction(BaseModel):
 @router.put("/{asset_id}/actions/{action_id}/confirm")
 async def confirm_action(asset_id: int, action_id: int, data: ConfirmAction):
     """补全 pending 流水缺的 amount/unit_price (OTC 基金 T+1 净值出来后)."""
-    asset = await get_external_asset(asset_id)
+    asset = await get_external_asset(asset_id, user_id=require_user_id())
     if not asset:
         raise HTTPException(404, "asset not found")
     if data.amount is None or data.amount <= 0:
         raise HTTPException(400, "amount 必须为正数")
 
-    actions = await list_external_actions(asset_id)
+    actions = await list_external_actions(asset_id, user_id=require_user_id())
     target = next((a for a in actions if a["id"] == action_id), None)
     if not target:
         raise HTTPException(404, "action not found")
@@ -1002,15 +1014,16 @@ async def confirm_action(asset_id: int, action_id: int, data: ConfirmAction):
         unit_price=float(unit_price) if unit_price is not None else None,
         fee=fee,
         status="confirmed",
+        user_id=require_user_id(),
     )
 
     # 同步缓存
-    actions = await list_external_actions(asset_id)
+    actions = await list_external_actions(asset_id, user_id=require_user_id())
     state = compute_external_state(actions, asset["asset_type"])
     sync: dict = {"cost_amount": state["cost_amount"]}
     if asset["asset_type"] in ("FUND", "CRYPTO"):
         sync["shares"] = state["shares"]
-    await update_external_asset(asset_id, **sync)
+    await update_external_asset(asset_id, **sync, user_id=require_user_id())
     return {"message": "confirmed", "state": state}
 
 
@@ -1028,7 +1041,7 @@ async def settle_pending_dca():
     from services.external_assets import get_fund_nav_on_date, nav_date_for
     from database import update_external_action
 
-    assets = await list_external_assets()
+    assets = await list_external_assets(user_id=require_user_id())
     settled = 0
     skipped = 0
     details: list[dict] = []
@@ -1038,7 +1051,7 @@ async def settle_pending_dca():
         code = asset.get("code")
         if _is_onchain_etf(code):
             continue  # 场内 ETF 按市价成交, 不走 T+1 净值结算
-        actions = await list_external_actions(asset["id"])
+        actions = await list_external_actions(asset["id"], user_id=require_user_id())
         pend = [a for a in actions
                 if (a.get("status") or "confirmed") == "pending"
                 and (a.get("action_type") or "").upper() in ("ADD", "BUY", "REDEEM", "SELL")]
@@ -1071,6 +1084,7 @@ async def settle_pending_dca():
                 await update_external_action(
                     a["id"], amount=final_amount, shares=shares,
                     unit_price=round(nav, 6), status="confirmed",
+                    user_id=require_user_id(),
                 )
                 settled += 1
                 changed = True
@@ -1096,15 +1110,16 @@ async def settle_pending_dca():
             await update_external_action(
                 a["id"], amount=final_amount, shares=shares,
                 unit_price=round(nav, 6), fee=fee, status="confirmed",
+                user_id=require_user_id(),
             )
             settled += 1
             changed = True
             details.append({"asset": asset.get("name"), "date": td, "nav_date": nd,
                             "nav": round(nav, 4), "shares": shares, "amount": final_amount, "fee": fee})
         if changed:
-            acts2 = await list_external_actions(asset["id"])
+            acts2 = await list_external_actions(asset["id"], user_id=require_user_id())
             state = compute_external_state(acts2, asset["asset_type"])
-            await update_external_asset(asset["id"], cost_amount=state["cost_amount"], shares=state["shares"])
+            await update_external_asset(asset["id"], cost_amount=state["cost_amount"], shares=state["shares"], user_id=require_user_id())
     return {"settled": settled, "skipped": skipped, "details": details}
 
 
@@ -1118,7 +1133,7 @@ async def recompute_dca_fees():
     from services.external_assets import get_fund_nav_on_date, nav_date_for
     from database import update_external_action
 
-    assets = await list_external_assets()
+    assets = await list_external_assets(user_id=require_user_id())
     recomputed = 0
     skipped = 0
     details: list[dict] = []
@@ -1131,7 +1146,7 @@ async def recompute_dca_fees():
         code = asset.get("code")
         if _is_onchain_etf(code):
             continue  # 场内 ETF 走市价/佣金, 不按净值+申购费重算
-        actions = await list_external_actions(asset["id"])
+        actions = await list_external_actions(asset["id"], user_id=require_user_id())
         dca_rows = [a for a in actions
                     if (a.get("status") or "confirmed") == "confirmed"
                     and (a.get("action_type") or "").upper() in ("ADD", "BUY")
@@ -1156,15 +1171,15 @@ async def recompute_dca_fees():
             # 没变就不写 (幂等)
             if abs(float(a.get("shares") or 0) - shares) < 1e-6 and abs(float(a.get("fee") or 0) - fee) < 0.005:
                 continue
-            await update_external_action(a["id"], shares=shares, unit_price=round(nav, 6), fee=fee)
+            await update_external_action(a["id"], shares=shares, unit_price=round(nav, 6), fee=fee, user_id=require_user_id())
             recomputed += 1
             changed = True
             details.append({"asset": asset.get("name"), "date": td, "nav": round(nav, 4),
                             "shares": shares, "fee": fee})
         if changed:
-            acts2 = await list_external_actions(asset["id"])
+            acts2 = await list_external_actions(asset["id"], user_id=require_user_id())
             state = compute_external_state(acts2, asset["asset_type"])
-            await update_external_asset(asset["id"], cost_amount=state["cost_amount"], shares=state["shares"])
+            await update_external_asset(asset["id"], cost_amount=state["cost_amount"], shares=state["shares"], user_id=require_user_id())
     return {"recomputed": recomputed, "skipped": skipped, "details": details}
 
 
@@ -1173,7 +1188,7 @@ async def refresh_fund_names():
     """按天天基金官方全称回填所有基金的名字 (场内 ETF 行情接口给的是简称, 会对不上)。
     名字拉不到的跳过; 一致的不动。"""
     from services.external_assets import _fetch_fund_name_sync
-    assets = await list_external_assets()
+    assets = await list_external_assets(user_id=require_user_id())
     updated = 0
     details: list[dict] = []
     seen: dict[str, str] = {}
@@ -1189,7 +1204,7 @@ async def refresh_fund_names():
                 full = ""
             seen[code] = full or ""
         if full and full != asset.get("name"):
-            await update_external_asset(asset["id"], name=full)
+            await update_external_asset(asset["id"], name=full, user_id=require_user_id())
             details.append({"code": code, "old": asset.get("name"), "new": full})
             updated += 1
     return {"updated": updated, "details": details}
@@ -1210,10 +1225,10 @@ async def patch_action(asset_id: int, action_id: int, data: ActionPatch):
     - pending 状态: 只接受 amount (兼容老行为, 状态保持 pending)
     - confirmed 状态: 接受全部字段, 改后重算资产 cost_amount/shares 同步
     """
-    asset = await get_external_asset(asset_id)
+    asset = await get_external_asset(asset_id, user_id=require_user_id())
     if not asset:
         raise HTTPException(404, "asset not found")
-    actions = await list_external_actions(asset_id)
+    actions = await list_external_actions(asset_id, user_id=require_user_id())
     target = next((a for a in actions if a["id"] == action_id), None)
     if not target:
         raise HTTPException(404, "action not found")
@@ -1257,26 +1272,26 @@ async def patch_action(asset_id: int, action_id: int, data: ActionPatch):
             raise HTTPException(400, "pending 流水只能改 amount / 日期, 其他字段请先点 '确认' 入账")
 
     from database import update_external_action
-    await update_external_action(action_id, **payload)
+    await update_external_action(action_id, **payload, user_id=require_user_id())
 
     # confirmed 改后同步资产缓存
     if status == "confirmed":
-        actions = await list_external_actions(asset_id)
+        actions = await list_external_actions(asset_id, user_id=require_user_id())
         state = compute_external_state(actions, asset["asset_type"])
         sync: dict = {"cost_amount": state["cost_amount"]}
         if asset["asset_type"] in ("FUND", "CRYPTO"):
             sync["shares"] = state["shares"]
-        await update_external_asset(asset_id, **sync)
+        await update_external_asset(asset_id, **sync, user_id=require_user_id())
     return {"message": "updated", **payload}
 
 
 @router.get("/{asset_id}/actions")
 async def list_actions(asset_id: int):
     """列流水 + 当前 ledger 状态."""
-    asset = await get_external_asset(asset_id)
+    asset = await get_external_asset(asset_id, user_id=require_user_id())
     if not asset:
         raise HTTPException(404, "asset not found")
-    actions = await list_external_actions(asset_id)
+    actions = await list_external_actions(asset_id, user_id=require_user_id())
     from database import resolve_action_time
     for a in actions:
         a["at_time"] = resolve_action_time(a)    # 成交时刻(供分时图打点)
@@ -1307,22 +1322,26 @@ async def list_actions(asset_id: int):
 @router.delete("/{asset_id}/actions/{action_id}")
 async def delete_action(asset_id: int, action_id: int):
     """删一条流水 (用于纠错). 之后会重新同步 cost_amount/shares."""
-    asset = await get_external_asset(asset_id)
+    asset = await get_external_asset(asset_id, user_id=require_user_id())
     if not asset:
         raise HTTPException(404, "asset not found")
-    await delete_external_action(action_id)
-    actions = await list_external_actions(asset_id)
+    if not any(row["id"] == action_id for row in await list_external_actions(asset_id, user_id=require_user_id())):
+        raise HTTPException(404, "action not found")
+    await delete_external_action(action_id, user_id=require_user_id())
+    actions = await list_external_actions(asset_id, user_id=require_user_id())
     state = compute_external_state(actions, asset["asset_type"])
     sync: dict = {"cost_amount": state["cost_amount"]}
     if asset["asset_type"] in ("FUND", "CRYPTO"):
         sync["shares"] = state["shares"]
-    await update_external_asset(asset_id, **sync)
+    await update_external_asset(asset_id, **sync, user_id=require_user_id())
     return {"message": "deleted", "state": state}
 
 
 @router.delete("/{asset_id}")
 async def remove_asset(asset_id: int):
-    await delete_external_asset(asset_id)
+    if not await get_external_asset(asset_id, user_id=require_user_id()):
+        raise HTTPException(404, "资产不存在")
+    await delete_external_asset(asset_id, user_id=require_user_id())
     return {"message": "deleted"}
 
 
@@ -1395,7 +1414,7 @@ async def okx_spot():
     if not spot.get("ok"):
         raise HTTPException(502, "; ".join(spot.get("errors") or ["读取失败"]))
 
-    rows = await list_external_assets()
+    rows = await list_external_assets(user_id=require_user_id())
     tracked = {}
     for a in rows:
         if a.get("asset_type") != "CRYPTO":

@@ -19,6 +19,7 @@
 那笔钱还没变成份额, 不该当成"今日买入份额"。
 """
 from __future__ import annotations
+from services.user_context import require_user_id
 
 import asyncio
 import time
@@ -27,7 +28,7 @@ from datetime import datetime, timedelta, timezone
 BUY_ACTS = {"BUY", "ADD"}
 SELL_ACTS = {"SELL", "REDUCE", "REDEEM"}
 
-_cache: tuple | None = None      # (结果, 时间戳)
+_cache: dict = {}      # (结果, 时间戳)
 _TTL = 12                        # 顶栏与持仓总览各自 20s 轮询, 缓存掉重复的全量 enrich
 _lock = asyncio.Lock()
 
@@ -110,14 +111,16 @@ async def today_pnl() -> dict:
     锁 + 缓存: 全量 enrich 在报价冷缓存时要 20s+(每个资产各打净值/代理请求), 而顶栏和
     持仓总览是两个独立调用方。并发进来时只让第一个真算, 其余等它的结果。
     """
-    global _cache
-    if _cache and time.time() - _cache[1] < _TTL:
-        return _cache[0]
+    user_id = require_user_id()
+    hit = _cache.get(user_id)
+    if hit and time.time() - hit[1] < _TTL:
+        return hit[0]
     async with _lock:
-        if _cache and time.time() - _cache[1] < _TTL:     # 等锁期间别人算完了
-            return _cache[0]
+        hit = _cache.get(user_id)
+        if hit and time.time() - hit[1] < _TTL:
+            return hit[0]
         out = await _compute()
-        _cache = (out, time.time())
+        _cache[user_id] = (out, time.time())
         return out
 
 
@@ -130,8 +133,8 @@ async def _compute() -> dict:
     items: list[dict] = []
 
     # ---------- A 股 ----------
-    holdings = {h["stock_code"]: h for h in await get_all_holdings()}
-    acts_all = await get_position_actions(limit=5000)
+    holdings = {h["stock_code"]: h for h in await get_all_holdings(user_id=require_user_id())}
+    acts_all = await get_position_actions(limit=5000, user_id=require_user_id())
     by_code: dict[str, list] = {}
     for a in acts_all:
         by_code.setdefault(a.get("stock_code"), []).append(a)
@@ -177,7 +180,7 @@ async def _compute() -> dict:
 
     # ---------- 场外资产 / 场内 ETF ----------
     from api.assets_routes import _enrich
-    assets = await list_external_assets()
+    assets = await list_external_assets(user_id=require_user_id())
     enriched = await asyncio.gather(*[_enrich(a) for a in assets])
     for a in enriched:
         t = a.get("asset_type")
@@ -200,7 +203,7 @@ async def _compute() -> dict:
             continue
         q = a.get("quote") or {}
         cur = float(a.get("shares") or 0)
-        f = _flow(await list_external_actions(a["id"]), day)
+        f = _flow(await list_external_actions(a["id"], user_id=require_user_id()), day)
         if not (cur or f["bought_shares"] or f["sold_shares"]):
             continue
         # 现单价: 场内 ETF = 实时市价, 场外 = 官方净值(优先)/盘中估值

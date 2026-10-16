@@ -1,9 +1,7 @@
-"""数据导出/导入: 全量 JSON 备份, 用于换设备 / 还原.
+"""当前账号的持仓资产 JSON 导出。
 
-策略:
-- 导出: 把用户数据表 dump 成 JSON, 跳过 kline_cache (可从网络重建).
-- 导入: 先把当前 DB 复制一份到 backups/ 再覆盖. 失败可手动还原.
-- 上传走 multipart/form-data, 体积无上限 (本地用).
+A04 仅导出已完成归属的资产表，结果不是完整备份。
+旧版整表导入暂停，待 A08 完成个人归属与 ID 校验。
 """
 from __future__ import annotations
 import json
@@ -17,7 +15,8 @@ from fastapi import APIRouter, File, HTTPException, UploadFile
 from fastapi.responses import Response
 
 from config import config
-from database import get_db
+from database import get_db, OWNED_PORTFOLIO_TABLES
+from services.user_context import require_user_id
 
 
 router = APIRouter(prefix="/api/data", tags=["data"])
@@ -50,20 +49,22 @@ async def _table_columns(db: aiosqlite.Connection, table: str) -> list[str]:
 
 @router.get("/export")
 async def export_all():
-    """全量导出. 返回 JSON 文件下载."""
+    """导出当前账号的持仓资产子集，返回 JSON 文件下载。"""
     db = await get_db()
     out: dict = {
         "_meta": {
             "version": EXPORT_VERSION,
             "exported_at": datetime.now().isoformat(timespec="seconds"),
             "app": "licai",
+            "scope": "portfolio_assets_only",
+            "complete_backup": False,
         },
         "tables": {},
     }
     try:
-        for t in _TABLES:
+        for t in OWNED_PORTFOLIO_TABLES:
             try:
-                cursor = await db.execute(f"SELECT * FROM {t}")
+                cursor = await db.execute(f"SELECT * FROM {t} WHERE user_id = ?", (require_user_id(),))
                 rows = await cursor.fetchall()
                 out["tables"][t] = [dict(r) for r in rows]
             except Exception as e:
@@ -110,6 +111,9 @@ async def import_all(file: UploadFile = File(...), mode: str = "replace"):
 
     if not isinstance(payload, dict) or "tables" not in payload:
         raise HTTPException(400, "格式错误: 缺少 tables 字段")
+    if any(table in _TABLES or table in OWNED_PORTFOLIO_TABLES for table in payload['tables']):
+        # 旧导入会整表删除且复用外部 ID；个人导入合同完成前不得触及已归属资源。
+        raise HTTPException(409, '旧版整表导入已暂停，待 A08 完成个人归属与 ID 校验；原数据未修改')
     meta = payload.get("_meta", {})
     if int(meta.get("version", 0)) > EXPORT_VERSION:
         raise HTTPException(400, f"备份文件版本 {meta.get('version')} 比当前应用 ({EXPORT_VERSION}) 还新, 不兼容")

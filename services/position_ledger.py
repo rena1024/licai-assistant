@@ -18,6 +18,7 @@ Derived quantities:
 - lots          : surviving lots with (shares, price, trade_date)
 """
 from __future__ import annotations
+from services.user_context import require_user_id
 from datetime import date, datetime
 from typing import Iterable
 
@@ -529,10 +530,10 @@ async def ledger_state(code: str, actions: list | None = None, holding_broker=_U
     import asyncio
     if actions is None:
         from database import get_position_actions
-        actions = await get_position_actions(code, limit=1000)
+        actions = await get_position_actions(code, limit=1000, user_id=require_user_id())
     if holding_broker is _UNSET:
         from database import get_holding
-        holding_broker = ((await get_holding(code)) or {}).get("broker")
+        holding_broker = ((await get_holding(code, user_id=require_user_id())) or {}).get("broker")
     resolve = await attach_auto_fees(actions, code, holding_broker, resolve, fee_overrides)
     if fx_now is None and _foreign_market(code) and any(not a.get("fx_rate") for a in actions):
         from services.market_data import code_fx
