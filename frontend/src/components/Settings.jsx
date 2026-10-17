@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import AdminUsers from './AdminUsers'
+import OperationsPanel from './OperationsPanel'
 import { api, fetchJSON } from '../hooks/useApi'
 import { AttributionSection } from './settings/AttributionSection'
 import { ProviderSection } from './settings/ProviderSection'
@@ -216,6 +217,7 @@ export default function Settings({ onClose }) {
         <div className="mt-2 pt-4 border-t border-border">
           <ProviderSection admin={admin} />
           {admin && <AdminUsers />}
+          {admin && <OperationsPanel />}
         </div>
 
         {/* OKX 策略之外的现货 */}

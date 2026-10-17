@@ -1,0 +1,22 @@
+name: licai
+services:
+  app:
+    image: licai:${LICAI_IMAGE_TAG:-candidate}
+    build:
+      context: .
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8888:8888"
+    environment:
+      LICAI_PROFILE: production
+      LICAI_DATA_DIR: /var/lib/licai
+      TZ: Asia/Shanghai
+    volumes:
+      - licai-data:/var/lib/licai
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    stop_grace_period: 30s
+volumes:
+  licai-data:
