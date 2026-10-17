@@ -137,7 +137,7 @@ def test_question_is_in_history_before_the_answer(temp_db, runs, monkeypatch):
         run = await runs.start("茅台今天怎么了")
         sessions = await list_ask_sessions(user_id=require_user_id())
         run.task.cancel()
-        await asyncio.sleep(0)
+        await asyncio.gather(run.task, return_exceptions=True)
         return sessions, run
 
     sessions, run = asyncio.run(main())
@@ -206,7 +206,7 @@ def test_cancel_stops_it_and_writes_no_answer(temp_db, runs, monkeypatch):
         run = await runs.start("茅台今天怎么了")
         await asyncio.sleep(0.06)
         assert runs.cancel(run.id) is True
-        await asyncio.sleep(0.05)
+        await asyncio.gather(run.task, return_exceptions=True)
         return run
 
     run = asyncio.run(main())

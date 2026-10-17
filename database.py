@@ -544,12 +544,20 @@ async def get_db() -> aiosqlite.Connection:
             closed=True
             import asyncio
             operation=asyncio.create_task(original_close())
+            cancelled=False
             try:
-                await asyncio.shield(operation)
-            except asyncio.CancelledError:
-                await operation
-                raise
+                # 重复取消等待者也不能提前释放仍在关闭的数据库连接。
+                while True:
+                    try:
+                        await asyncio.shield(operation)
+                        break
+                    except asyncio.CancelledError:
+                        cancelled=True
+                        if operation.done():
+                            operation.result()
+                            break
             finally:runtime_state.release_connection(key)
+            if cancelled:raise asyncio.CancelledError()
         db.close=close
         managed=True
         runtime_state.check_generation(generation)

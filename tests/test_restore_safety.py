@@ -184,3 +184,30 @@ def test_price_monitor_takes_new_generation_after_restore(owners,monkeypatch):
             with pytest.raises(asyncio.CancelledError):await ws.price_monitor_loop()
     asyncio.run(exercise())
     assert len(seen)==2 and seen[1]==seen[0]+1
+
+
+def test_repeated_close_cancellation_keeps_connection_lease_until_closed(owners,monkeypatch):
+    import aiosqlite
+    import database
+    from services import runtime_state
+    original=aiosqlite.Connection.close
+    async def exercise():
+        started=asyncio.Event();release=asyncio.Event()
+        async def blocked(connection):
+            started.set();await release.wait();await original(connection)
+        monkeypatch.setattr(aiosqlite.Connection,'close',blocked)
+        connection=await database.get_db()
+        task=asyncio.create_task(connection.close())
+        try:
+            await started.wait()
+            task.cancel();await asyncio.sleep(0)
+            task.cancel()
+            # 推进取消传播链，不依赖真实时钟或线程速度。
+            for _ in range(3):await asyncio.sleep(0)
+            assert not runtime_state.wait_for_drain(0)
+        finally:
+            release.set()
+            with pytest.raises(asyncio.CancelledError):await task
+            await original(connection)
+        assert runtime_state.wait_for_drain(0)
+    asyncio.run(exercise())
