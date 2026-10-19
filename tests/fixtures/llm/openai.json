@@ -1,0 +1,22 @@
+{
+  "id": "resp1",
+  "status": "completed",
+  "output": [
+    {
+      "type": "function_call",
+      "call_id": "c",
+      "name": "quote",
+      "arguments": "{\"code\":\"1\"}"
+    }
+  ],
+  "usage": {
+    "input_tokens": 100,
+    "output_tokens": 50,
+    "input_tokens_details": {
+      "cached_tokens": 30
+    },
+    "output_tokens_details": {
+      "reasoning_tokens": 20
+    }
+  }
+}

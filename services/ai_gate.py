@@ -10,6 +10,17 @@ def require_controlled_ai():
     raise AIUnavailable()
 
 
+async def require_route_ready(path):
+    from services.model_catalog import candidates
+    scene = ('multi_lens' if path.endswith('deep-dive') else 'ask' if '/ask/' in path
+             else 'briefing' if '/briefing' in path else 'news' if '/news/' in path
+             else 'portfolio' if '/portfolio/' in path else 'market' if '/market/' in path
+             else 'sector' if '/sector/' in path else 'rules')
+    required = {'text','tools'} if scene=='ask' else {'text'}
+    if path == '/api/settings/llm/test' or not await candidates(scene,required):
+        raise AIUnavailable()
+
+
 AI_ROUTES={
     ('POST','/api/ask/stock'),('POST','/api/ask/stock/stream'),('POST','/api/ask/runs'),('POST','/api/ask/deep-dive'),
     ('POST','/api/briefing/refresh'),('POST','/api/briefings/refresh'),('POST','/api/settings/llm/test'),('POST','/api/settings/rules/mine'),

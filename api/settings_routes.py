@@ -340,117 +340,21 @@ async def save_risk_config(data: RiskConfig):
     return {"message": "保存成功"}
 
 
-# --- LLM Config ---
-
-_llm_test_last_call: float = 0.0
-_LLM_TEST_COOLDOWN_S = 5  # minimum seconds between test calls
-
-
-class LLMConfig(BaseModel):
-    base_url: str = ""
-    api_key: str = ""
-    api_key_header: str = "x-api-key"
-    api_key_prefix: str = ""
-    proxy: str = ""
-    model_map: dict[str, str] = {}
-    update_api_key: bool = True  # True = apply api_key field; False = keep existing key
-
-    @field_validator("base_url")
-    @classmethod
-    def validate_base_url(cls, v: str) -> str:
-        if v and not v.startswith(("http://", "https://")):
-            raise ValueError("base_url 必须以 http:// 或 https:// 开头")
-        return v
-
-    @field_validator("proxy")
-    @classmethod
-    def validate_proxy(cls, v: str) -> str:
-        if v and not v.startswith(("http://", "https://", "socks5://")):
-            raise ValueError("proxy 必须以 http://、https:// 或 socks5:// 开头")
-        return v
-
-
-@router.get("/llm")
+# 旧入口只保留明确迁移提示，不能继续保存已失效的全局模型选择。
+@router.get('/llm')
 async def get_llm_config_api():
-    """返回当前 LLM 配置 (脱敏)."""
-    config = llm_client.get_llm_config()
-    # overlay DB-stored values for fields that env var may override
-    db_base_url = await get_config("llm_base_url")
-    db_api_key_header = await get_config("llm_api_key_header")
-    db_api_key_prefix = await get_config("llm_api_key_prefix")
-    db_proxy = await get_config("llm_proxy")
-    db_model_map_raw = await get_config("llm_model_map")
-    db_model_map = {}
-    if db_model_map_raw:
-        try:
-            import json
-            db_model_map = json.loads(db_model_map_raw)
-        except Exception:
-            pass
-    return {
-        "base_url": config["base_url"],
-        "has_api_key": config["has_api_key"],
-        "api_key_header": config["api_key_header"],
-        "api_key_prefix": config["api_key_prefix"],
-        "proxy": config["proxy"],
-        "model_map": config["model_map"],
-        "using_oauth_fallback": config["using_oauth_fallback"],
-        "db_base_url": db_base_url or "",
-        "db_api_key_header": db_api_key_header or "x-api-key",
-        "db_api_key_prefix": db_api_key_prefix or "",
-        "db_proxy": db_proxy or "",
-        "db_model_map": db_model_map,
-    }
+    return llm_client.get_llm_config()
 
 
-@router.post("/llm")
-async def save_llm_config_api(data: LLMConfig):
-    """保存 LLM 配置到 DB 并应用."""
-    import json
-    await set_config("llm_base_url", data.base_url)
-    if data.update_api_key and data.api_key:
-        await set_config("llm_api_key", data.api_key)
-    await set_config("llm_api_key_header", data.api_key_header)
-    await set_config("llm_api_key_prefix", data.api_key_prefix)
-    await set_config("llm_proxy", data.proxy)
-    if data.model_map:
-        await set_config("llm_model_map", json.dumps(data.model_map, ensure_ascii=False))
-    else:
-        await set_config("llm_model_map", "")
-
-    llm_client.configure_llm(
-        base_url=data.base_url,
-        api_key=data.api_key if data.update_api_key else "",
-        api_key_header=data.api_key_header,
-        api_key_prefix=data.api_key_prefix,
-        proxy=data.proxy,
-        model_map=data.model_map or None,
-    )
-    return {"message": "保存成功"}
+@router.post('/llm')
+async def save_llm_config_api():
+    raise HTTPException(410,'旧模型配置已停用，请使用模型服务和个人场景设置')
 
 
-@router.post("/llm/test")
+@router.post('/llm/test')
 async def test_llm_connection():
-    """发送一条测试请求, 返回连接结果."""
-    global _llm_test_last_call
-    now = time.time()
-    if now - _llm_test_last_call < _LLM_TEST_COOLDOWN_S:
-        remaining = round(_LLM_TEST_COOLDOWN_S - (now - _llm_test_last_call), 1)
-        raise HTTPException(
-            status_code=429,
-            detail=f"请 {remaining}s 后再试 (每次测试间隔 ≥ {_LLM_TEST_COOLDOWN_S}s)",
-        )
-    _llm_test_last_call = now
+    raise HTTPException(410,'请选择模型并显式发起受预算控制的能力测试')
 
-    import asyncio
-    result = await asyncio.to_thread(llm_client.test_connection)
-    return result
-
-
-# ── 沉淀规则的待审队列 ────────────────────────────────────
-# 为什么放在设置页: 这些规则会改 agent 的 system prompt, 是"改配置"而不是看行情。
-# 而且必须有个地方看得见 —— 之前只有 CLI, 待审队列在界面上完全不存在, 挖出来的候选
-# 就一直躺着没人批, 等于这套机制白做。
 
 @router.get("/rules")
 async def rules_list():

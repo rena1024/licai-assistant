@@ -1,10 +1,11 @@
 import { useEffect, useState } from 'react'
 import AdminUsers from './AdminUsers'
 import OperationsPanel from './OperationsPanel'
+import UsagePanel from './UsagePanel'
+import ModelSettings from './ModelSettings'
 import { api, fetchJSON } from '../hooks/useApi'
 import { AttributionSection } from './settings/AttributionSection'
 import { ProviderSection } from './settings/ProviderSection'
-import { LLMConfigSection } from './settings/LLMConfigSection'
 import { OkxSpotSection } from './settings/OkxSpotSection'
 import { PromptRulesSection } from './settings/PromptRulesSection'
 import { ProxySection } from './settings/ProxySection'
@@ -109,6 +110,7 @@ export default function Settings({ onClose }) {
         </button>
       </div>
       <div className="p-4 space-y-3">
+        <UsagePanel admin={admin} />
         <div>
           <label className="text-[12px] text-text-dim block mb-1">飞书 Webhook URL</label>
           <p className="text-[11px] text-text-muted mb-2">
@@ -205,7 +207,7 @@ export default function Settings({ onClose }) {
 
         {/* LLM 配置 */}
         <div className="mt-2 pt-4 border-t border-border">
-          {admin && <LLMConfigSection />}
+          <ModelSettings admin={admin} />
         </div>
 
         {/* 知识星球(可选, 只读) */}

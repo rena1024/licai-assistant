@@ -1,7 +1,7 @@
 import { apiFetch } from '../hooks/sessionRuntime'
 import { useState, useEffect, useRef } from 'react'
 import { fetchJSON } from '../hooks/useApi'
-import { MiniMarkdown, SourcesBlock, ToolCallStrip, startRun, followRun, liveRuns, cancelRun } from './askShared'
+import { MiniMarkdown, SourcesBlock, ToolCallStrip, AnswerVersions, applyAnswerVersion, startRun, followRun, liveRuns, cancelRun } from './askShared'
 import ImageZoom from './ImageZoom'
 
 // 能力展示型推荐问题 (page 模式空态用), 覆盖 市场风格/资金主线/政策/基本面/同行/筹码
@@ -143,6 +143,8 @@ export default function StockAsk({ page = false }) {
         if (m.role === 'user') turns.push({ q: m.content, images: (m.meta && m.meta.images) || [], steps: [], thought: '', answer: null, typed: '', done: true, sources: [], charts: [] })
         else if (turns.length) {
           const t = turns[turns.length - 1]
+          if (t.answer) t.versions = [...(t.versions || []), { modelId: t.modelId || '', text: t.answer, reason: t.err || '未完成' }]
+          t.modelId = m.meta?.model_id; t.version = m.meta?.answer_version; t.err = m.meta?.status === 'incomplete' ? '未完成' : m.meta?.status === 'cancelled' ? '已取消' : '';
           t.answer = m.content; t.typed = m.content; t.sources = (m.meta && m.meta.sources) || []; t.charts = (m.meta && m.meta.charts) || []
         }
       }
@@ -199,6 +201,10 @@ export default function StockAsk({ page = false }) {
   }
 
   const handleEv = (ev) => {
+    if (ev.type === 'version') { clearInterval(typer.current); patchLast(it => applyAnswerVersion(it, ev)); return }
+    if (ev.type === 'queue') { patchLast(it => ({ ...it, queueStatus: ev.status })); return }
+    if (ev.type === 'model') { patchLast(it => ({ ...it, modelId: ev.model_id, queueStatus: '' })); return }
+    if (ev.type === 'partial') { patchLast(it => ({ ...it, typed: ev.text })); return }
     if (ev.type === 'step') patchLast(it => ({ ...it, steps: [...it.steps, { tool: ev.tool, label: ev.label, arg: ev.arg }] }))
     // 取数失败要回填到对应的 chip 上 —— step 是工具跑之前发的, 不回填的话失败的工具
     // 也会跟成功的一样打绿勾, 界面上看不出这一块其实没数
@@ -325,7 +331,8 @@ export default function StockAsk({ page = false }) {
             )}
             <div className="mt-2 px-3 py-2.5 rounded-lg bg-accent/8 border border-accent/25">
               {/* 步骤实时流: 工具调用胶囊(与排行榜弹窗共用 ToolCallStrip) */}
-              <ToolCallStrip steps={it.steps} settled={it.answer != null || it.done} />
+              <AnswerVersions turn={it} />
+                <ToolCallStrip steps={it.steps} settled={it.answer != null || it.done} />
               {it.thought && it.answer == null && <div className="text-[11px] text-text-muted italic mb-1.5">{it.thought}</div>}
               {/* AI 渲染的K线图(结构已标注): 我方数据画→精确, 数字以正文为准 */}
               {(it.charts || []).length > 0 && (

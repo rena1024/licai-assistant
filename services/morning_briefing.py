@@ -205,8 +205,8 @@ async def generate_briefing_for_stock(stock_code: str, stock_name: str,
     try:
         raw = await asyncio.to_thread(
             call_claude, user_prompt, SYSTEM_PROMPT,
-            "claude-sonnet-5", 1200,
-        )
+            None, 1200,
+         scene='briefing')
         parsed = json.loads(_strip_to_json(raw))
     except Exception as e:
         return {
@@ -239,7 +239,7 @@ async def generate_briefing_for_stock(stock_code: str, stock_name: str,
 
 async def _ask(user_prompt: str) -> dict:
     from services.llm_client import call_claude
-    raw = await asyncio.to_thread(call_claude, user_prompt, SYSTEM_PROMPT, "claude-sonnet-5", 1200)
+    raw = await asyncio.to_thread(call_claude, user_prompt, SYSTEM_PROMPT, None, 1200, scene='briefing')
     return json.loads(_strip_to_json(raw))
 
 

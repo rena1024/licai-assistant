@@ -36,7 +36,7 @@ async def cmd_mine() -> int:
     for it in items:
         try:
             text = await asyncio.to_thread(
-                llm.call_claude, rf.draft_prompt(it), rf.draft_system(), "balanced", 3000)
+                llm.call_claude, rf.draft_prompt(it), rf.draft_system(), None, 3000, scene='rules')
         except Exception as e:
             print(f"  起草失败: {type(e).__name__}: {str(e)[:70]}")
             continue

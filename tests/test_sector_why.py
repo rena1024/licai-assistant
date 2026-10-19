@@ -11,7 +11,7 @@ async def _fake_market_news():
 def test_why_returns_two_parts(monkeypatch, authenticated_client):
     client = authenticated_client
     calls = {"n": 0}
-    def fake(user_prompt, system=None, model=None, max_tokens=500):
+    def fake(user_prompt, system=None, model=None, max_tokens=500, **kwargs):
         calls["n"] += 1
         return '{"why":"铜价下跌拖累","relation":"你持有有色股受影响"}'
     monkeypatch.setattr(llm, "call_claude", fake)
@@ -46,4 +46,5 @@ def test_why_non_json_fallback(monkeypatch, authenticated_client):
 
 @pytest.fixture(autouse=True)
 def controlled_ai_protocol_unit_boundary(monkeypatch):
-    monkeypatch.setattr('services.ai_gate.require_controlled_ai',lambda:None)
+    async def ready(path): pass
+    monkeypatch.setattr('services.ai_gate.require_route_ready',ready)

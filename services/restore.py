@@ -64,6 +64,9 @@ def _replace_current(point,actor_id):
             with closing(sqlite3.connect(source)) as current:
                 local={row[0] for row in current.execute("SELECT u.uuid FROM users u JOIN user_settings s ON s.user_id=u.id WHERE s.key='ai_mode' AND s.value='local_only'")}
             with closing(sqlite3.connect(stage/'database.sqlite3')) as restored:
+                with closing(sqlite3.connect(source)) as current:
+                    from services.llm_recovery import preserve_finance
+                    preserve_finance(current,restored)
                 restored.execute('UPDATE sessions SET revoked_at=? WHERE revoked_at IS NULL',(int(time.time()),))
                 restored.execute('UPDATE users SET auth_version=auth_version+1')
                 restored.execute("UPDATE ask_run SET status='interrupted' WHERE status='running'")

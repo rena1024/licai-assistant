@@ -131,17 +131,12 @@ def test_test_process_blocks_database_outside_sandbox(tmp_path):
 
 
 def test_test_profile_never_reads_keychain(monkeypatch):
-    monkeypatch.setattr("services.ai_gate.require_controlled_ai",lambda:None)
     from services import llm_client
-
-    monkeypatch.setattr(llm_client, "_api_key", "")
-    monkeypatch.setattr(llm_client, "_cached_token", None)
-    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
-    # 子进程层已经禁止执行，任何实际 Keychain 访问都会让此用例失败。
-    with pytest.raises(RuntimeError, match="无法获取 LLM API 凭证"):
-        llm_client._resolve_auth()
-    with pytest.raises(RuntimeError, match="测试"):
-        llm_client._call_via_cli("private prompt", None, "fake", 10)
+    # 新客户端已彻底移除认证回退，环境变量也不能恢复这些路径。
+    monkeypatch.setenv('ANTHROPIC_API_KEY','synthetic-ignored')
+    assert not hasattr(llm_client,'_resolve_auth')
+    assert not hasattr(llm_client,'_call_via_cli')
+    assert not llm_client.get_llm_config()['using_oauth_fallback']
 
 
 def test_test_lifespan_initializes_only_temporary_database(tmp_path, monkeypatch):

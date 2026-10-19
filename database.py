@@ -605,6 +605,17 @@ async def init_db():
         await db.executescript(ACCOUNT_SCHEMA)
         drops = ''.join(f'DROP TABLE "{table}";\n' for table in old_tables)
         await db.executescript('BEGIN IMMEDIATE;\n' + drops + SCHEMA + '\nCOMMIT;')
+        from services.model_catalog import SCHEMA as MODEL_SCHEMA
+        await db.executescript(MODEL_SCHEMA)
+        from services.budget import SCHEMA as BUDGET_SCHEMA
+        await db.executescript(BUDGET_SCHEMA)
+        from services.local_queue import SCHEMA as QUEUE_SCHEMA
+        await db.executescript(QUEUE_SCHEMA)
+        await db.execute('CREATE TABLE IF NOT EXISTS runtime_metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL)')
+        llm_version = await (await db.execute("SELECT value FROM runtime_metadata WHERE key='llm_schema_version'")).fetchone()
+        if llm_version and llm_version[0] != '1':
+            raise RuntimePathError('模型数据库版本不兼容，停止初始化')
+        await db.execute("INSERT OR IGNORE INTO runtime_metadata VALUES ('llm_schema_version','1')")
         await db.execute('CREATE TABLE IF NOT EXISTS runtime_metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL)')
         await db.execute("INSERT OR IGNORE INTO runtime_metadata VALUES ('layout_version', ?)", (LAYOUT_VERSION,))
         await db.execute("INSERT OR IGNORE INTO runtime_metadata VALUES ('account_schema_version', ?)", (ACCOUNT_SCHEMA_VERSION,))

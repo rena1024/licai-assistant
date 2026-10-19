@@ -162,19 +162,32 @@ class AuthenticationMiddleware(BaseHTTPMiddleware):
                 session = await require_session(request, csrf=request.method not in _SAFE_METHODS)
                 if path.startswith(('/api/settings/tdx', '/api/settings/proxy', '/api/settings/llm', '/api/admin/')) and session.account.role != 'admin':
                     raise HTTPException(403, '仅管理员可管理公共配置')
+                if session.account.role != 'admin' and (
+                    ((path == '/api/models' or (path.startswith('/api/models/') and path.endswith('/test'))) and request.method != 'GET')
+                    or path.startswith(('/api/usage/limits','/api/usage/reconcile','/api/usage/cloud-confirmation','/api/usage/policy'))
+                    or (path == '/api/usage' and request.query_params.get('subject') not in {None,str(session.context.user_id)})
+                ):
+                    raise HTTPException(403, '仅管理员可管理公共额度或查看其他用户用量')
                 if session.account.must_change_password:
                     raise HTTPException(403, {"code": "password_change_required", "message": "请先修改临时密码"})
             except accounts.AccountError as exc:
                 return JSONResponse({"detail": {"code": exc.code, "message": str(exc)}}, status_code=exc.status_code, headers={"Cache-Control": "no-store"})
             except HTTPException as exc:
                 return JSONResponse({"detail": exc.detail}, status_code=exc.status_code, headers={"Cache-Control": "no-store"})
-            from services.ai_gate import AI_ROUTES,require_controlled_ai,AIUnavailable
+            from services.ai_gate import AI_ROUTES,require_route_ready,AIUnavailable
             if (request.method,path.rstrip('/')) in AI_ROUTES:
-                try:require_controlled_ai()
+                try:
+                    with user_scope(session.context.user_id):
+                        await require_route_ready(path)
                 except AIUnavailable as exc:
                     return JSONResponse({'detail':{'code':exc.code,'message':str(exc)}},status_code=503)
             with user_scope(session.context.user_id):
-                response = await call_next(request)
+                from services.task_context import _version
+                version_token=_version.set(session.context.auth_version)
+                try:
+                    response = await call_next(request)
+                finally:
+                    _version.reset(version_token)
                 if request.method not in _SAFE_METHODS and path.startswith('/api/settings/') and response.status_code<400:
                     db=await get_db()
                     try:

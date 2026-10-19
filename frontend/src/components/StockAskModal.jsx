@@ -1,7 +1,7 @@
 import { apiFetch } from '../hooks/sessionRuntime'
 import { useState, useEffect, useRef } from 'react'
 import { createPortal } from 'react-dom'
-import { MiniMarkdown, SourcesBlock, ToolCallStrip, startRun, startDeepDive, followRun, liveRuns, cancelRun } from './askShared'
+import { MiniMarkdown, SourcesBlock, ToolCallStrip, AnswerVersions, applyAnswerVersion, startRun, startDeepDive, followRun, liveRuns, cancelRun } from './askShared'
 import ImageZoom from './ImageZoom'
 
 function pctColor(v) {
@@ -91,6 +91,10 @@ export default function StockAskModal({ stock, onClose, initialQuestion = '' }) 
   }, [history])
 
   const handleEv = (ev) => {
+    if (ev.type === 'version') { clearInterval(typer.current); patchLast(it => applyAnswerVersion(it, ev)); return }
+    if (ev.type === 'queue') { patchLast(it => ({ ...it, queueStatus: ev.status })); return }
+    if (ev.type === 'model') { patchLast(it => ({ ...it, modelId: ev.model_id, queueStatus: '' })); return }
+    if (ev.type === 'partial') { patchLast(it => ({ ...it, typed: ev.text })); return }
     if (ev.type === 'step') patchLast(it => ({ ...it, steps: [...it.steps, { tool: ev.tool, label: ev.label, arg: ev.arg }] }))
     // 取数失败要回填到对应的 chip 上 —— step 是工具跑之前发的, 不回填的话失败的工具
     // 也会跟成功的一样打绿勾, 界面上看不出这一块其实没数
@@ -311,6 +315,7 @@ export default function StockAskModal({ stock, onClose, initialQuestion = '' }) 
             <div key={i}>
               <div className="text-[12px] text-text-bright bg-surface-3 rounded-lg px-3 py-1.5 inline-block">{it.q}</div>
               <div className="mt-2 px-3 py-2.5 rounded-lg bg-accent/8 border border-accent/25">
+                <AnswerVersions turn={it} />
                 <ToolCallStrip steps={it.steps} settled={it.answer != null || it.done} />
                 {(it.charts || []).length > 0 && (
                   <div className="flex flex-col gap-2 mb-2">

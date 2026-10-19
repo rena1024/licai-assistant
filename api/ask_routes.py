@@ -81,6 +81,7 @@ class RunIn(BaseModel):
     session_id: Optional[int] = None        # 空=新建会话
     title: Optional[str] = None
     scope: str = "market"                   # market | stock:<code>, 前端按它认领自己那条
+    regenerate: bool = False
 
 
 class DeepIn(BaseModel):
@@ -144,7 +145,7 @@ async def start_deep_dive(data: DeepIn):
     title = f"深挖 {nm or code}"
     run = await ask_runs.start(
         f"{title}: {q}", session_id=data.session_id, title=title,
-        scope=f"stock:{code}", events=_lens_stream(code, nm, q))
+        scope=f"deep:{code}", events=lambda:_lens_stream(code, nm, q))
     return {"run_id": run.id, "session_id": run.session_id, "cursor": 0}
 
 
@@ -160,7 +161,7 @@ async def start_run(data: RunIn):
     user_meta = _persist_images({"images": imgs}) if imgs else None
     run = await ask_runs.start(
         data.question, agent_question=data.agent_question, history=hist, images=imgs,
-        session_id=data.session_id, title=data.title, scope=data.scope, user_meta=user_meta)
+        session_id=data.session_id, title=data.title, scope=data.scope, user_meta=user_meta, regenerate=data.regenerate)
     return {"run_id": run.id, "session_id": run.session_id, "cursor": 0,
             "images": (user_meta or {}).get("images", [])}
 

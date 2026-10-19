@@ -22,6 +22,9 @@ import asyncio
 import json as _json
 import time
 import uuid
+import threading
+import hashlib
+import weakref
 from typing import Optional
 
 from database import (create_ask_session, add_ask_message, save_ask_run, update_ask_run,
@@ -34,10 +37,12 @@ _HARD_WALL_SEC = 20 * 60      # 单条 SSE 连接的兜底上限, 不让它无�
 # 事件落盘的合并窗口: 每条都写一次盘, 一轮下来是几十次开关连接; 攒一下再写。
 # 收尾必定 flush, 所以最坏也就丢掉最后这半秒的中间步骤(答案在 ask_message 里, 不受影响)。
 _FLUSH_SEC = 0.5
+_TASK_LIMIT_SEC = 15 * 60
 # 过程提示不是工具, 不进历史 meta(否则重开会话会多出假工具胶囊)
 _NOT_TOOLS = ("llm_retry", "self_check")
 
 _RUNS: "dict[str, Run]" = {}
+_START_LOCKS = weakref.WeakKeyDictionary()
 
 
 class Run:
@@ -57,6 +62,13 @@ class Run:
         self.finished_at: Optional[float] = None
         self.task: Optional[asyncio.Task] = None
         self._flushed_at = 0.0             # 上次落盘时间(合并窗口用)
+        self.cancel_event = threading.Event()
+        self.status = 'running'
+        self.request_key = ''
+        self.model_id = None
+        self.answer_version = 0
+        self.stop_fallback = False
+        self.queue_status = ''
 
     def brief(self) -> dict:
         return {"run_id": self.id, "session_id": self.session_id, "question": self.question,
@@ -68,7 +80,7 @@ class Run:
         if not force and time.time() - self._flushed_at < _FLUSH_SEC:
             return
         self._flushed_at = time.time()
-        status = ("done" if self.done else "running")
+        status = self.status if self.done else 'running'
         try:
             await update_ask_run(self.id, _json.dumps(self.events, ensure_ascii=False),
                                  status, self.answered, self._flushed_at, user_id=require_user_id())
@@ -87,7 +99,7 @@ def _gc() -> None:
             _RUNS.pop(r.id, None)
 
 
-async def _drive(run: Run, events) -> None:
+async def _drive(run: Run, events, *, finalize=True) -> bool:
     """把一条事件流跑完, 事件塞进缓冲, 收尾落库。这里不碰任何请求对象 —— 前端在不在都一样跑。
 
     events 是一个**已经创建好的异步生成器**, 不再写死 ask_stock_stream: 多视角对抗那条链
@@ -99,15 +111,26 @@ async def _drive(run: Run, events) -> None:
     steps: list = []
     charts: list = []
     cancelled = False
+    failed = False
+    partial = ''
     try:
         async for ev in events:
+            if run.cancel_event.is_set():
+                raise asyncio.CancelledError()
             from services.task_context import ensure_active
             await ensure_active()
-            run.events.append(ev)
+            if ev.get('type') != 'done':
+                run.events.append(ev)
             await run.flush()               # 合并窗口内不重复写
             t = ev.get("type")
             if t == "answer":
                 answer = ev.get("text")
+            elif t == 'partial':
+                partial = ev.get('text','')
+            elif t == 'error':
+                failed = True
+                if ev.get('code') in {'queue_timeout','queue_full','cancelled','task_timeout','inactive_user'}:
+                    run.stop_fallback = True
             elif t == "sources":
                 sources.extend(ev.get("sources") or [])
             elif t == "step":
@@ -116,30 +139,44 @@ async def _drive(run: Run, events) -> None:
                 charts.append(ev.get("url"))
     except asyncio.CancelledError:
         cancelled = True
+        run.cancel_event.set()
+        run.status = 'cancelled'
         run.events.append({"type": "error", "error": "已取消"})
     except Exception as e:
+        failed = True
         run.events.append({"type": "error", "error": str(e)})
     # 落库放在这儿而不是前端: 答出来就存, 哪怕早就没人在看了 —— 这一步就是"切走也不丢"
-    if answer and not cancelled:
+    text = answer or partial
+    if text:
         meta = {"tools_used": [s for s in steps if s and s not in _NOT_TOOLS],
-                "sources": sources, "charts": charts}
+                "sources": sources, "charts": charts,
+                'model_id':run.model_id, 'answer_version':run.answer_version,
+                'status':'cancelled' if cancelled else 'incomplete' if failed or not answer else 'complete'}
         try:
-            await add_ask_message(run.session_id, "assistant", answer,
+            await add_ask_message(run.session_id, "assistant", text,
                                   _json.dumps(meta, ensure_ascii=False), user_id=require_user_id())
-            run.answered = True
+            run.answered = bool(answer and not cancelled and not failed)
         except Exception as e:
             run.events.append({"type": "error", "error": f"答案没能落库: {e}"})
+    if finalize:
+        await _finish(run, cancelled=cancelled)
+    return bool(run.answered and not failed and not cancelled)
+
+
+async def _finish(run, *, cancelled=False):
     run.done = True
+    run.status = 'cancelled' if cancelled or run.cancel_event.is_set() else 'done' if run.answered else 'failed'
     run.finished_at = time.time()
-    run.events.append({"type": "done"})
-    await run.flush(force=True)             # 收尾这次必写: 内存里的会被 GC, 盘上的留着
+    if not run.events or run.events[-1].get('type') != 'done':
+        run.events.append({'type':'done','status':run.status})
+    await run.flush(force=True)
 
 
-async def start(question: str, *, agent_question: Optional[str] = None,
+async def _start(question: str, *, agent_question: Optional[str] = None,
                 history: Optional[list] = None, images: Optional[list] = None,
                 session_id: Optional[int] = None, title: Optional[str] = None,
                 scope: str = "market", user_meta: Optional[dict] = None,
-                events=None) -> Run:
+                events=None, regenerate=False) -> Run:
     """建会话(如需) → 先把问题落库 → 起后台 task。返回后这一轮的命运已经跟前端无关了。
 
     question 是给人看的原话; agent_question 是真正喂给 agent 的(抽屉会前缀上"名称(代码): ")。
@@ -148,6 +185,13 @@ async def start(question: str, *, agent_question: Optional[str] = None,
     from services.task_context import ensure_active
     version = await ensure_active()
     _gc()
+    from config import config
+    key = hashlib.sha256(_json.dumps([config.db_path,require_user_id(),scope,question,agent_question,session_id,history,images],sort_keys=True).encode()).hexdigest()
+    if not regenerate:
+        existing = next((r for r in _RUNS.values() if not r.done and r.request_key==key and r.user_id==require_user_id()),None)
+        if existing:
+            if events is not None and hasattr(events,'aclose'):await events.aclose()
+            return existing
     if session_id:
         from database import get_ask_session
         if not await get_ask_session(session_id, user_id=require_user_id()):
@@ -158,24 +202,78 @@ async def start(question: str, *, agent_question: Optional[str] = None,
     await add_ask_message(session_id, "user", question,
                           _json.dumps(user_meta, ensure_ascii=False) if user_meta else "", user_id=require_user_id())
     run = Run(question, session_id, scope, title or question)
+    run.request_key = key
     _RUNS[run.id] = run
     try:                                    # 先建流水行: 之后每次 flush 都是 UPDATE
         await save_ask_run(run.id, session_id, scope, question, run.started_at, user_id=require_user_id())
         await prune_ask_runs(user_id=require_user_id())
     except Exception:
         pass
-    stream = events if events is not None else ask_stock_stream(
-        agent_question or question, history or [], images)
+    factory = (events if callable(events) else lambda:events) if events is not None else lambda:ask_stock_stream(agent_question or question, history or [], images)
     async def owned_drive():
         from services.task_context import _version, ensure_active
         token = _version.set(version)
+        from services import llm_runtime, model_catalog
+        task_token = llm_runtime._task.set(run.id)
+        cancel_token = llm_runtime._cancel.set(run.cancel_event)
         try:
             await ensure_active()
-            await _drive(run, stream)
+            scene = 'multi_lens' if scope.startswith('deep:') else 'ask'
+            required = {'text'} if scene=='multi_lens' else {'text','tools'}
+            if images:required.add('image')
+            choices = await model_catalog.candidates(scene,required)
+            ids = [m['id'] for m in choices] or [None]
+            if events is not None and not callable(events):ids=ids[:1]
+            for index,identifier in enumerate(ids):
+                if run.cancel_event.is_set():break
+                await ensure_active()
+                # 每个备用版本都从完整原始问题重建，不能续接前一模型的半段内容。
+                run.model_id=identifier;run.answer_version=index+1
+                if identifier is not None:
+                    run.events.append({'type':'version','version':index+1,'model_id':identifier,
+                                       'reason':'上一版本失败，重新完整生成' if index else ''})
+                candidate_token=llm_runtime._candidate.set(identifier)
+                scene_token=llm_runtime._scene.set(scene)
+                try:
+                    if await _drive(run,factory(),finalize=False) or run.stop_fallback:break
+                finally:
+                    llm_runtime._candidate.reset(candidate_token)
+                    llm_runtime._scene.reset(scene_token)
+            await _finish(run)
+        except asyncio.CancelledError:
+            run.cancel_event.set()
+            await _finish(run,cancelled=True)
+        except Exception:
+            run.events.append({'type':'error','error':'任务已失效或执行失败，请重新登录后检查配置'})
+            await _finish(run)
         finally:
+            llm_runtime._task.reset(task_token)
+            llm_runtime._cancel.reset(cancel_token)
             _version.reset(token)
-    run.task = asyncio.create_task(owned_drive())
+    async def timed_drive():
+        timer=None
+        try:
+            async with asyncio.timeout(_TASK_LIMIT_SEC) as timer:
+                await owned_drive()
+        except TimeoutError:
+            pass
+        if timer and timer.expired():
+            run.cancel_event.set()
+            run.answered=False
+            run.done=True
+            run.status='timeout'
+            run.finished_at=time.time()
+            if run.events and run.events[-1].get('type')=='done':run.events.pop()
+            run.events.extend([{'type':'error','error':'任务等待超时，未自动重跑','code':'task_timeout'},{'type':'done','status':'timeout'}])
+            await run.flush(force=True)
+    run.task = asyncio.create_task(timed_drive())
     return run
+
+
+async def start(question, **kwargs):
+    lock = _START_LOCKS.setdefault(asyncio.get_running_loop(),asyncio.Lock())
+    async with lock:
+        return await _start(question,**kwargs)
 
 
 async def follow(run_id: str, cursor: int = 0):
@@ -192,9 +290,18 @@ async def follow(run_id: str, cursor: int = 0):
     if cursor < 0:
         cursor = 0
     deadline = time.time() + _HARD_WALL_SEC
+    next_queue_check = 0
     while True:
         from services.runtime_state import check_generation
         check_generation()
+        if not run.done and time.monotonic()>=next_queue_check:
+            from services.local_queue import task_status
+            status=await task_status(run.id,run.user_id)
+            next_queue_check=time.monotonic()+1
+            if status in {'queued','running'} and status != run.queue_status:
+                run.queue_status=status
+                run.events.append({'type':'queue','status':status})
+                await run.flush()
         if cursor < len(run.events):
             ev = run.events[cursor]
             cursor += 1
@@ -264,5 +371,9 @@ def cancel(run_id: str) -> bool:
     run = get(run_id)
     if not run or run.done or not run.task:
         return False
+    run.cancel_event.set()
+    run.status='cancelled'
     run.task.cancel()
+    if not run.done:
+        asyncio.create_task(_finish(run,cancelled=True))
     return True

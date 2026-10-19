@@ -23,8 +23,6 @@ from __future__ import annotations
 import asyncio
 import json as _json
 
-_MODEL_LENS = "claude-sonnet-5"     # 四层并行, 用均衡档
-_MODEL_SYNTH = "claude-sonnet-5"
 _MAX_TOK_LENS = 1800
 _MAX_TOK_SYNTH = 2200
 
@@ -193,7 +191,7 @@ async def _analyze_with_pack(code: str, name: str, question: str,
         try:
             txt = await asyncio.to_thread(
                 llm_client.call_claude, head + "## 可用事实(fact pack)\n" + pack,
-                sys, _MODEL_LENS, _MAX_TOK_LENS)
+                sys, None, _MAX_TOK_LENS, scene='multi_lens')
         except Exception as e:
             return {"key": lens["key"], "name": lens["name"], "error": str(e)[:200]}
         return {"key": lens["key"], "name": lens["name"], "text": (txt or "").strip()}
@@ -206,7 +204,7 @@ async def _analyze_with_pack(code: str, name: str, question: str,
     body = "\n\n".join(f"## 第{i+1}份 · {l['name']}\n{l['text']}" for i, l in enumerate(ok))
     try:
         synth = await asyncio.to_thread(
-            llm_client.call_claude, head + body, _SYNTH_SYSTEM, _MODEL_SYNTH, _MAX_TOK_SYNTH)
+            llm_client.call_claude, head + body, _SYNTH_SYSTEM, None, _MAX_TOK_SYNTH, scene='multi_lens')
     except Exception as e:
         synth = ""
         lenses.append({"key": "综合", "name": "综合", "error": str(e)[:200]})

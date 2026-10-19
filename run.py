@@ -29,6 +29,8 @@ from database import init_db, get_config, set_config
 from services import llm_client
 from services.js_runtime import initialize_js_runtime
 from api.operations_routes import router as operations_router
+from api.model_routes import router as model_router
+from api.usage_routes import router as usage_router
 from api.admin_routes import router as admin_router
 from api.auth_routes import router as auth_router
 from api.portfolio_routes import router as portfolio_router
@@ -102,6 +104,8 @@ async def lifespan(app: FastAPI):
     try:
         from database import interrupt_running_ask_runs
         _n = await interrupt_running_ask_runs()
+        from services.local_queue import interrupt_pending
+        await interrupt_pending()
         if _n:
             print(f"[startup] 上次没跑完的 agent 轮次 {_n} 条, 已标记为中断")
     except Exception as e:
@@ -180,6 +184,17 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="理财助手", lifespan=lifespan)
+from fastapi.responses import JSONResponse
+from services.accounts import AccountError
+from services.llm_types import LLMError
+
+@app.exception_handler(AccountError)
+async def account_failure(request, exc):
+    return JSONResponse({'detail':{'code':exc.code,'message':str(exc)}},status_code=exc.status_code)
+
+@app.exception_handler(LLMError)
+async def model_failure(request, exc):
+    return JSONResponse({'detail':{'code':exc.code,'message':str(exc)}},status_code=409)
 from services.auth import AuthenticationMiddleware
 app.add_middleware(AuthenticationMiddleware)
 from services.runtime_middleware import RuntimeSafetyMiddleware
@@ -192,6 +207,8 @@ app.mount("/assets", StaticFiles(directory="static/assets"), name="assets")
 app.include_router(auth_router)
 app.include_router(admin_router)
 app.include_router(operations_router)
+app.include_router(model_router)
+app.include_router(usage_router)
 app.include_router(portfolio_router)
 app.include_router(market_router)
 app.include_router(settings_router)

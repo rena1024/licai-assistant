@@ -6,7 +6,7 @@ import services.llm_client as llm
 def test_interpret_returns_three_parts(monkeypatch, authenticated_client):
     client = authenticated_client
     calls = {"n": 0}
-    def fake(user_prompt, system=None, model=None, max_tokens=600):
+    def fake(user_prompt, system=None, model=None, max_tokens=600, **kwargs):
         calls["n"] += 1
         return '{"what":"讲了降准","why":"利好流动性","relation":"你持有银行股受益"}'
     monkeypatch.setattr(llm, "call_claude", fake)
@@ -98,4 +98,5 @@ def test_trim_tail_line_anchored_no_midbody_cut():
 
 @pytest.fixture(autouse=True)
 def controlled_ai_protocol_unit_boundary(monkeypatch):
-    monkeypatch.setattr('services.ai_gate.require_controlled_ai',lambda:None)
+    async def ready(path): pass
+    monkeypatch.setattr('services.ai_gate.require_route_ready',ready)

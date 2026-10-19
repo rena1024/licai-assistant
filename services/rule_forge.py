@@ -281,7 +281,7 @@ async def mine_new(max_drafts: int = 3) -> dict:
     for it in items[:max_drafts]:
         try:
             text = await _aio.to_thread(
-                llm.call_claude, draft_prompt(it), draft_system(), "balanced", 3000)
+                llm.call_claude, draft_prompt(it), draft_system(), None, 3000, scene='rules')
         except Exception:
             stat["failed"] += 1
             continue

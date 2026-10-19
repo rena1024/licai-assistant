@@ -14,7 +14,7 @@ def fake_llm(monkeypatch):
     """拦下 call_claude, 记下每次的 (system, user), 返回可辨识的假文本。"""
     calls = []
 
-    def _fake(user_prompt, system=None, model="", max_tokens=0):
+    def _fake(user_prompt, system=None, model="", max_tokens=0, **kwargs):
         calls.append({"system": system or "", "user": user_prompt or ""})
         if "只做三件事" in (system or ""):          # 综合那一步
             return "## 分歧点\n(假)"
@@ -123,7 +123,7 @@ def test_one_lens_failing_does_not_sink_the_rest(fake_pack, monkeypatch):
     from services import llm_client
     n = {"i": 0}
 
-    def _fake(user_prompt, system=None, model="", max_tokens=0):
+    def _fake(user_prompt, system=None, model="", max_tokens=0, **kwargs):
         if "只做三件事" in (system or ""):
             return "## 分歧点\n(假)"
         n["i"] += 1

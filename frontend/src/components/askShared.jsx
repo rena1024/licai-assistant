@@ -1,6 +1,27 @@
 import { apiFetch } from '../hooks/sessionRuntime'
 import { useState } from 'react'
 
+export function applyAnswerVersion(turn, event) {
+  const previous = [...(turn.versions || [])]
+  if (turn.modelId && (turn.answer || turn.typed || turn.err)) {
+    previous.push({ modelId: turn.modelId, text: turn.answer || turn.typed || '', reason: turn.err || '未完成' })
+  }
+  return { ...turn, versions: previous, modelId: event.model_id, version: event.version, reason: event.reason,
+    answer: null, typed: '', err: '', done: false, steps: [], sources: [], charts: [], thought: '', queueStatus: '' }
+}
+
+export function AnswerVersions({ turn }) {
+  return <>
+    {!turn.done && turn.answer == null && turn.queueStatus && <p role="status" className="text-xs text-text-dim">{turn.queueStatus === 'queued' ? '本地排队中，可主动取消' : '本地模型执行中'}</p>}
+    {(turn.versions || []).map((version, index) => <details key={index} className="mb-2 rounded border border-border p-2 text-sm">
+      <summary>版本 {index + 1} · {version.modelId} · 未完成</summary>
+      <p>{version.reason}</p><MiniMarkdown text={version.text} />
+    </details>)}
+    {turn.modelId && <p className="mb-2 text-xs text-text-dim">版本 {turn.version || 1} · {turn.modelId}{turn.reason ? ` · ${turn.reason}` : ''}</p>}
+    {turn.err && turn.typed && <MiniMarkdown text={turn.typed} />}
+  </>
+}
+
 // 每个数据工具一套线性 SVG 图标(描边跟随 currentColor, 贴合暖金深色主题)
 const TOOL_ICONS = {
   resolve_stock: <><circle cx="10.5" cy="10.5" r="6.5" /><path d="M19.5 19.5l-4.2-4.2" /></>,

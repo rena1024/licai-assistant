@@ -28,7 +28,12 @@ async def dispatch_personal(callback, *, ai: bool = False):
                 if ai and await get_user_setting('automatic_ai_enabled',user_id=uid) != '1':
                     continue
                 await ensure_active()
-                task = asyncio.create_task(callback())
+                from services.llm_runtime import _background
+                background_token = _background.set(True)
+                try:
+                    task = asyncio.create_task(callback())
+                finally:
+                    _background.reset(background_token)
                 _running.setdefault(uid,set()).add(task)
                 try:
                     await task
@@ -119,6 +124,8 @@ async def public_loop():
             # 整个 tick 共用代际，恢复后的下一轮重新获取代际。
             with runtime_scope():
                 now = datetime.now(timezone(timedelta(hours=8)))
+                from services.usage import purge_details
+                await purge_details()
                 day = now.date().isoformat()
                 minutes = now.hour*60+now.minute
                 if 910 <= minutes <= 940 and _is_a_share_trading_day(now.date()):

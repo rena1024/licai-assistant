@@ -14,8 +14,7 @@ import time as _time
 import services.llm_client as _llm
 import services.answer_guard as _guard
 
-_MODEL = "claude-opus-4-8"
-_MAX_ROUNDS = 14
+_MAX_ROUNDS = 8
 
 # A 股 代码↔名称 表 (akshare, 缓存 12h, 供按名字解析)
 _code_name_cache: tuple[dict, dict, float] | None = None
@@ -3514,6 +3513,8 @@ async def _run_tool(tu: dict) -> dict:
     顺便记工具缺口: 取不到数时"工具没报错、模型照着空数据往下答"是最难发现的一类问题
     (实测 get_news 对美股返回 10 条但最新一条比异动早三天), 记成台账才不用等用户看出来。
     """
+    from services.llm_runtime import check_cancelled
+    check_cancelled()
     name = tu.get("name")
     args = tu.get("input") or {}
     try:
@@ -3589,11 +3590,7 @@ async def _active_tools() -> list:
         caps = frozenset()
     tools = [t for t in tools
              if _PROVIDER_TOOLS.get(t.get("name")) in (None, *caps)]
-    try:
-        if _llm._is_anthropic_official():
-            return tools
-    except Exception:
-        pass
+    # 独立搜索在 C 阶段接入；厂商内置联网工具没有价格合同，不能发送。
     return [t for t in tools if t.get("type") != "web_search_20250305"]
 
 _SYSTEM = (
@@ -3961,7 +3958,7 @@ async def _llm_round(messages: list):
     for attempt in range(_OVERLOAD_ROUND_RETRIES + 1):
         try:
             resp = await asyncio.to_thread(
-                _llm.call_claude_messages, messages, _system(), _MODEL, 4096, await _active_tools())
+                _llm.call_claude_messages, messages, _system(), None, 4096, await _active_tools(), scene='ask')
             yield ("resp", resp)
             return
         except _llm.LLMOverloaded as e:
@@ -3973,7 +3970,7 @@ async def _llm_round(messages: list):
                             "arg": f"{wait}s (第 {attempt + 1}/{_OVERLOAD_ROUND_RETRIES} 次)"})
             await asyncio.sleep(wait)
         except Exception as e:
-            yield ("error", str(e))
+            yield ("error", _llm.ErrorText(e))
             return
 
 
@@ -3998,7 +3995,7 @@ async def ask_stock_stream(question: str, history: list | None = None, images: l
             if kind == "wait":
                 yield val
             elif kind == "error":
-                yield {"type": "error", "error": val}
+                yield {"type": "error", "error": str(val), 'code':getattr(val,'code','provider_error')}
                 return
             else:
                 resp = val
@@ -4006,6 +4003,13 @@ async def ask_stock_stream(question: str, history: list | None = None, images: l
             yield {"type": "error", "error": "LLM 无响应"}
             return
         content = resp.get("content", [])
+        if resp.get('model_id'):
+            yield {'type':'model','model_id':resp['model_id'],'reason':resp.get('fallback_reason','')}
+        if resp.get('stop_reason')=='max_tokens':
+            partial=''.join(b.get('text','') for b in content if b.get('type')=='text')
+            if partial:yield {'type':'partial','text':partial}
+            yield {'type':'error','error':'达到输出上限，本版本未完成'}
+            return
         messages.append({"role": "assistant", "content": content})
         # 服务端联网搜索(web_search)已由 API 执行完, 这里只把"联网搜索"作为步骤推给前端
         for b in content:

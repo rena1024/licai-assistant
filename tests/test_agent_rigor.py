@@ -1,3 +1,4 @@
+from tests.test_ownership_portfolio import owners
 """agent 的三条严谨性约束: 取数失败自曝 / 关键数字不许心算 / 算术工具本身不能被玩坏。
 
 灵感来自 ai-berkshire(MIT) 的两条硬规则 —— 「联网失败禁止伪装」与「禁止心算, 必须调工具」。
@@ -39,7 +40,7 @@ def test_error_message_is_truncated_not_dropped():
     assert evs and 0 < len(evs[0]["err"]) <= 80
 
 
-def test_tool_exception_becomes_an_error_dict(monkeypatch):
+def test_tool_exception_becomes_an_error_dict(monkeypatch, owners):
     """执行器抛异常也要变成 {"error": ...} —— 否则 gather 直接炸掉整轮, 更看不出发生了什么。"""
     import services.stock_agent as sa
 
@@ -51,7 +52,7 @@ def test_tool_exception_becomes_an_error_dict(monkeypatch):
     assert "error" in out and "上游断连" in out["error"]
 
 
-def test_unknown_tool_also_errors():
+def test_unknown_tool_also_errors(owners):
     from services.stock_agent import _run_tool
     out = asyncio.run(_run_tool({"name": "不存在的工具", "input": {}}))
     assert "error" in out
