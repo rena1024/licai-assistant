@@ -55,6 +55,33 @@ class CapabilityTest(BaseModel):
     capability: str = Field(pattern='^(text|tools|image|structured)$')
 
 
+class ModelVersion(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    expected_version: int = Field(ge=1, strict=True)
+
+
+class ModelState(ModelVersion):
+    enabled: bool = Field(strict=True)
+
+
+@router.patch('/{identifier}')
+async def set_model_enabled(identifier: str, data: ModelState):
+    try:
+        return await catalog.set_model_enabled(identifier, **data.model_dump())
+    except LLMError as exc:
+        raise HTTPException(409, str(exc)) from None
+    except ValueError:
+        raise HTTPException(422, '模型配置无效，请先编辑并补齐配置') from None
+
+
+@router.delete('/{identifier}')
+async def delete_model(identifier: str, data: ModelVersion):
+    try:
+        return await catalog.delete_model(identifier, **data.model_dump())
+    except LLMError as exc:
+        raise HTTPException(409, str(exc)) from None
+
+
 @router.post('/{identifier}/test')
 async def test_capability(identifier: str, data: CapabilityTest):
     from services.accounts import _require_admin

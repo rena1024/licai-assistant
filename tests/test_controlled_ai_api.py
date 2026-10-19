@@ -84,3 +84,99 @@ def test_policy_is_admin_only_and_persists_local_concurrency(owners):
         result=client.put('/api/usage/policy',json={'detail_days':7,'warning_threshold':75,'local_concurrency':2})
         assert result.status_code==200
         assert client.get('/api/usage/policy').json()=={'detail_days':7,'warning_threshold':75,'local_concurrency':2}
+
+
+def test_model_lifecycle_requires_admin_and_preserves_choices_and_history(owners):
+    from run import app
+    from services import model_catalog as catalog
+    from services.llm_types import LLMError
+    from services.user_context import user_scope
+    import sqlite3
+    import pytest
+    a, b, path = owners
+    payload = dict(id='local-life', protocol='ollama', endpoint='http://localhost:11434',
+                   model='qwen3:8b', local=True, enabled=True, expected_version=0)
+    with TestClient(app) as client:
+        login(client, 'owner-a', 'Synthetic-password-01!')
+        assert client.put('/api/models', json=payload).status_code == 200
+        assert client.request('DELETE', '/api/models/local-life', json={'expected_version': 1}).status_code == 409
+        login(client, 'owner-b', 'Synthetic-password-02!')
+        assert client.put('/api/models/preferences', json=dict(local_only=True, scenes={'ask': ['local-life']}, expected_version=0)).status_code == 200
+        assert client.patch('/api/models/local-life', json=dict(enabled=False, expected_version=1)).status_code == 403
+        assert client.request('DELETE', '/api/models/local-life', json={'expected_version': 1}).status_code == 403
+        login(client, 'owner-a', 'Synthetic-password-01!')
+        disabled = client.patch('/api/models/local-life', json=dict(enabled=False, expected_version=1))
+        assert disabled.status_code == 200 and disabled.json()['version'] == 2
+        assert disabled.json()['enabled'] is False
+        assert client.patch('/api/models/local-life', json=dict(enabled=True, expected_version=1)).status_code == 409
+        enabled = client.patch('/api/models/local-life', json=dict(enabled=True, expected_version=2))
+        assert enabled.status_code == 200 and enabled.json()['enabled'] is True
+        assert client.patch('/api/models/local-life', json=dict(enabled=False, expected_version=3)).status_code == 200
+        with sqlite3.connect(path) as db:
+            db.execute("INSERT INTO llm_model_checks VALUES ('local-life',1,'text',1,'',1)")
+            db.execute("INSERT INTO llm_usage_monthly VALUES (?,'2026-10','local-life','ask',1,1,1)", (a,))
+        assert client.request('DELETE', '/api/models/local-life', json={'expected_version': 3}).status_code == 409
+        assert client.request('DELETE', '/api/models/local-life', json={'expected_version': 4}).status_code == 200
+        assert client.get('/api/models').json()['models'] == []
+        # 禁止复用已删除标识，避免旧个人选择或排队任务绑定到另一项新服务。
+        assert client.put('/api/models', json=payload).status_code == 409
+        login(client, 'owner-b', 'Synthetic-password-02!')
+        assert client.get('/api/models/preferences').json()['scenes']['ask'] == ['local-life']
+        with user_scope(b):
+            assert asyncio.run(catalog.candidates('ask', {'text'})) == []
+            with pytest.raises(LLMError):
+                asyncio.run(catalog.private_model('local-life'))
+        with sqlite3.connect(path) as db:
+            assert db.execute("SELECT COUNT(*) FROM llm_model_checks WHERE model_id='local-life'").fetchone()[0] == 1
+            assert db.execute("SELECT COUNT(*) FROM llm_usage_monthly WHERE model_id='local-life'").fetchone()[0] == 1
+            assert 'api_key' not in db.execute("SELECT config FROM llm_models WHERE id='local-life'").fetchone()[0]
+
+
+def test_disabled_cloud_model_cannot_be_enabled_without_complete_configuration(owners):
+    from run import app
+    with TestClient(app) as client:
+        login(client, 'owner-a', 'Synthetic-password-01!')
+        assert client.put('/api/models', json=dict(id='incomplete', protocol='deepseek',
+            endpoint='https://api.deepseek.com', model='synthetic', enabled=False, expected_version=0)).status_code == 200
+        assert client.patch('/api/models/incomplete', json=dict(enabled=True, expected_version=1)).status_code == 422
+        assert client.patch('/api/models/incomplete', json=dict(enabled='false', expected_version=1)).status_code == 422
+        model = client.get('/api/models').json()['models'][0]
+        assert model['enabled'] is False and model['version'] == 1
+
+
+def test_deleted_model_preserves_unknown_reservation_and_late_reconciliation(owners):
+    from services import model_catalog as catalog, budget, usage
+    from services.user_context import user_scope
+    from services.llm_types import CallContext, Usage, LLMError
+    from tests.test_budget_ledger import PRICE
+    import pytest
+    a, b, _ = owners
+
+    async def exercise():
+        await configure(a, b)
+        with user_scope(b):
+            reservation = await budget.reserve_attempt(CallContext(b, 'ask', 'late-delete'), 'cloud', PRICE, 1000, 'late-delete')
+            await budget.settle_attempt(reservation, None)
+            before = await budget.summary(subject=b)
+        with user_scope(a):
+            await catalog.set_model_enabled('cloud', enabled=False, expected_version=1)
+            await catalog.delete_model('cloud', expected_version=2)
+            await catalog.save_model(dict(id='cloud-new', protocol='anthropic', endpoint='https://api.anthropic.com',
+                model='synthetic', api_key='synthetic', price=PRICE), expected_version=0)
+        with user_scope(b):
+            assert await budget.summary(subject=b) == before
+            assert (await usage.report())['pending'][0]['state'] == 'unknown'
+            # 删除配置不能通过换模型标识绕开同一服务端点的未知费用限制。
+            with pytest.raises(LLMError) as caught:
+                await budget.reserve_attempt(CallContext(b, 'ask', 'new-delete'), 'cloud-new', PRICE, 1000, 'new-delete')
+            assert caught.value.code == 'usage_unknown'
+        with user_scope(a):
+            await usage.reconcile(reservation, Usage(input_tokens=10, output_tokens=1), '删除服务后核对迟到用量')
+        with user_scope(b):
+            report = await usage.report()
+            assert report['pending'] == []
+            assert report['details'][0]['state'] == 'settled'
+            assert report['details'][0]['model_id'] == 'cloud'
+            assert report['budget']['user']['day']['reserved'] == 0
+            assert report['budget']['user']['day']['spent'] == budget.cost_micro(PRICE, Usage(input_tokens=10, output_tokens=1))
+    asyncio.run(exercise())

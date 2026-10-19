@@ -94,7 +94,8 @@ def _public(row):
 async def list_models():
     db = await get_db()
     try:
-        models=[_public(r) for r in await (await db.execute('SELECT * FROM llm_models ORDER BY id')).fetchall()]
+        models=[_public(r) for r in await (await db.execute('SELECT * FROM llm_models ORDER BY id')).fetchall()
+                if not json.loads(r['config']).get('_deleted')]
         for model in models:
             checks=await (await db.execute('SELECT capability,success,reason,created_at FROM llm_model_checks WHERE model_id=? AND version=?',(model['id'],model['version']))).fetchall()
             model['checks']=[dict(r) for r in checks]
@@ -110,6 +111,8 @@ async def save_model(data, *, expected_version):
         await db.execute('BEGIN IMMEDIATE')
         await _require_admin(db, require_user_id())
         old = await (await db.execute('SELECT * FROM llm_models WHERE id=?', (data.get('id'),))).fetchone()
+        if old and json.loads(old['config']).get('_deleted'):
+            raise LLMError('model_deleted', '模型服务已删除，请使用新的模型标识')
         if (old['version'] if old else 0) != expected_version:
             raise LLMError('config_conflict', '模型配置已更新，请刷新')
         data = dict(data)
@@ -126,6 +129,54 @@ async def save_model(data, *, expected_version):
         await audit.record(db, action='configuration_changed', outcome='success', created_at=accounts._now(None), actor_id=require_user_id())
         await db.commit()
         return _public({'config': json.dumps(raw), 'version': version})
+    finally:
+        await db.close()
+
+
+async def _model_for_update(db, identifier, expected_version):
+    await _require_admin(db, require_user_id())
+    row = await (await db.execute('SELECT * FROM llm_models WHERE id=?', (identifier,))).fetchone()
+    if not row or json.loads(row['config']).get('_deleted'):
+        raise LLMError('model_missing', '模型服务不存在或已删除')
+    if row['version'] != expected_version:
+        raise LLMError('config_conflict', '模型配置已更新，请刷新')
+    return json.loads(row['config'])
+
+
+async def set_model_enabled(identifier, *, enabled, expected_version):
+    db = await get_db()
+    try:
+        await db.execute('BEGIN IMMEDIATE')
+        data = await _model_for_update(db, identifier, expected_version)
+        data['enabled'] = enabled
+        ModelConfig(**data)
+        await db.execute('UPDATE llm_models SET version=?,config=? WHERE id=?',
+                         (expected_version + 1, json.dumps(data), identifier))
+        from services import audit, accounts
+        await audit.record(db, action='configuration_changed', outcome='success',
+                           created_at=accounts._now(None), actor_id=require_user_id())
+        await db.commit()
+        return _public({'config': json.dumps(data), 'version': expected_version + 1})
+    finally:
+        await db.close()
+
+
+async def delete_model(identifier, *, expected_version):
+    db = await get_db()
+    try:
+        await db.execute('BEGIN IMMEDIATE')
+        data = await _model_for_update(db, identifier, expected_version)
+        if data['enabled']:
+            raise LLMError('model_enabled', '请先停用模型服务，再删除')
+        # 保留标识和版本防止旧任务、旧个人选择绑定到新服务；移除凭证与其余配置。
+        tombstone = {'_deleted': True, 'endpoint': data['endpoint']}
+        await db.execute('UPDATE llm_models SET version=?,config=? WHERE id=?',
+                         (expected_version + 1, json.dumps(tombstone), identifier))
+        from services import audit, accounts
+        await audit.record(db, action='configuration_changed', outcome='success',
+                           created_at=accounts._now(None), actor_id=require_user_id())
+        await db.commit()
+        return {'deleted': True, 'id': identifier}
     finally:
         await db.close()
 
@@ -179,7 +230,7 @@ async def private_model(identifier):
     db = await get_db()
     try:
         row = await (await db.execute('SELECT * FROM llm_models WHERE id=?', (identifier,))).fetchone()
-        if not row:
+        if not row or json.loads(row['config']).get('_deleted'):
             raise LLMError('model_missing', '模型不存在')
         return ModelConfig(**json.loads(row['config'])), row['version']
     finally:

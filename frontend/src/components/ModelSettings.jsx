@@ -40,6 +40,20 @@ function ModelServices({ models, reload, execute, busy }) {
   const [result, setResult] = useState('')
   const [validationError, setValidationError] = useState('')
   const [saving, setSaving] = useState(false)
+  const manageModel = async (model, remove = false) => {
+    if (remove && !confirm(`删除模型服务 ${model.id}？仅删除本应用配置，不删除 Ollama 模型文件。历史用量保留，用户原选择将显示为失效；此标识不可复用。`)) return
+    setResult(''); setValidationError('')
+    const response = await execute(`/api/models/${encodeURIComponent(model.id)}`, remove ? 'DELETE' : 'PATCH', {
+      expected_version: model.version, ...(remove ? {} : { enabled: !model.enabled }),
+    })
+    if (!response) return
+    if (editing?.id === model.id) {
+      setEditing(null); setProtocol('ollama'); setEndpoint(defaultEndpoints.ollama)
+    }
+    setResult(`模型 ${model.id} 已${remove ? '删除' : model.enabled ? '停用' : '启用'}`)
+    try { await reload() }
+    catch { setValidationError('操作已完成，但列表刷新失败，请刷新页面查看。') }
+  }
   const submit = async event => {
     event.preventDefault()
     setResult(''); setValidationError('')
@@ -68,10 +82,13 @@ function ModelServices({ models, reload, execute, busy }) {
   return <section className="space-y-3 border-t border-border pt-3">
     <h4 className="text-[13px] font-semibold">管理：模型服务</h4>
     <p className="text-xs text-text-dim">管理员开放服务，用户自行选择模型。单价按原币 / 百万 Token 填写；价格、汇率或凭证缺失不能开放云端服务。协议能力须实际测试确认。</p>
+    <p className="text-xs text-text-dim">停用后可再次启用；删除需先停用，只移除本应用服务配置，历史用量保留。</p>
     {models.map(m => <div key={m.id} className="rounded border border-border p-2 text-sm">
       <p>{m.id} · {m.model} · v{m.version} · {m.local ? '本地' : '云端'} · {m.enabled ? '已开放' : '已停用'}</p>
       <p>{m.capabilities.map(c => capabilities[c]).join(' / ')} · {m.validation_status || '尚未真实联调'}</p>
       <button type="button" disabled={busy} onClick={() => { setEditing(m); setProtocol(m.protocol); setEndpoint(m.endpoint) }} className="mr-3 text-accent">编辑 {m.id}</button>
+      <button type="button" disabled={busy || saving} aria-label={`${m.enabled ? '停用' : '启用'} ${m.id}`} onClick={() => manageModel(m)} className="mr-3 text-accent disabled:opacity-50">{m.enabled ? '停用' : '启用'}</button>
+      <button type="button" disabled={busy || saving || m.enabled} aria-label={`删除 ${m.id}`} title={m.enabled ? '请先停用，再删除' : '删除模型服务配置'} onClick={() => manageModel(m, true)} className="mr-3 text-bear disabled:opacity-50">删除</button>
       {m.capabilities.map(capability => <button key={capability} type="button" disabled={busy} onClick={async () => {
         if (!confirm(`将对 ${m.id} 发送测试请求，云端测试可能产生费用并占用全局预算。继续？`)) return
         const response = await execute(`/api/models/${encodeURIComponent(m.id)}/test`, 'POST', { capability })

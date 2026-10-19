@@ -163,7 +163,7 @@ class AuthenticationMiddleware(BaseHTTPMiddleware):
                 if path.startswith(('/api/settings/tdx', '/api/settings/proxy', '/api/settings/llm', '/api/admin/')) and session.account.role != 'admin':
                     raise HTTPException(403, '仅管理员可管理公共配置')
                 if session.account.role != 'admin' and (
-                    ((path == '/api/models' or (path.startswith('/api/models/') and path.endswith('/test'))) and request.method != 'GET')
+                    ((path == '/api/models' or (path.startswith('/api/models/') and path != '/api/models/preferences')) and request.method != 'GET')
                     or path.startswith(('/api/usage/limits','/api/usage/reconcile','/api/usage/cloud-confirmation','/api/usage/policy'))
                     or (path == '/api/usage' and request.query_params.get('subject') not in {None,str(session.context.user_id)})
                 ):
