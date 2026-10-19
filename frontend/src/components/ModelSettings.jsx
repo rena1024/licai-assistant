@@ -50,7 +50,7 @@ function ModelServices({ models, reload, execute, busy }) {
     } finally { setSaving(false) }
   }
   return <section className="space-y-3 border-t border-border pt-3">
-    <h3 className="font-semibold">管理：模型服务</h3>
+    <h4 className="text-[13px] font-semibold">管理：模型服务</h4>
     <p className="text-xs text-text-dim">管理员开放服务，用户自行选择模型。单价按原币 / 百万 Token 填写；价格、汇率或凭证缺失不能开放云端服务。协议能力须实际测试确认。</p>
     {models.map(m => <div key={m.id} className="rounded border border-border p-2 text-sm">
       <p>{m.id} · {m.model} · v{m.version} · {m.local ? '本地' : '云端'} · {m.enabled ? '已开放' : '已停用'}</p>
@@ -69,7 +69,7 @@ function ModelServices({ models, reload, execute, busy }) {
       const firstInvalid = event.currentTarget.querySelector(':invalid')
       if (field === firstInvalid) setValidationError(`${field.labels?.[0]?.textContent || '模型配置'}：${field.validationMessage}`)
     }} className="grid gap-3 sm:grid-cols-2">
-      <h4 className="sm:col-span-2">{editing ? `编辑 ${editing.id}` : '新增模型'}</h4>
+      <h5 className="sm:col-span-2 text-[12px] font-medium">{editing ? `编辑 ${editing.id}` : '新增模型'}</h5>
       <label>模型标识<input name="id" required pattern="[a-zA-Z0-9_\-]{1,64}" title="请输入 1–64 位英文字母、数字、下划线或连字符，例如 local-qwen" aria-describedby="model-id-help" readOnly={!!editing} defaultValue={editing?.id || ''} className={inputClass} /></label>
       <label>协议<select value={protocol} onChange={e => setProtocol(e.target.value)} className={inputClass}>
         {['ollama', 'anthropic', 'openai', 'deepseek', 'qwen', 'gemini', 'openai_compatible'].map(p => <option key={p}>{p}</option>)}
@@ -114,7 +114,7 @@ export default function ModelSettings({ admin }) {
     finally { setBusy(false) }
   }
   return <section aria-labelledby="model-settings-title" className="border-t border-border pt-4 space-y-3">
-    <h2 id="model-settings-title" className="font-semibold">我的 AI 设置</h2>
+    <h3 id="model-settings-title" className="text-sm font-semibold">我的 AI 设置</h3>
     <p className="text-xs text-text-dim">只按你选择的主模型和备用顺序调用。仅本地模式仍可使用在线行情和资讯；无合格本地模型时 AI 暂不可用，手工理财功能照常使用。</p>
     {prefs ? <>
       <label className="block"><input type="checkbox" checked={prefs.local_only} onChange={e => setPrefs({ ...prefs, local_only: e.target.checked })} /> 仅本地推理（保存后阻止旧任务后续云端请求）</label>

@@ -103,7 +103,7 @@ export default function Settings({ onClose }) {
     <section className="rounded-xl border border-accent/20 bg-surface-2/80 overflow-hidden"
       style={{ animation: 'fade-up 0.3s ease-out' }}>
       <div className="flex items-center justify-between px-4 py-3 border-b border-border">
-        <h2 className="text-[13px] font-medium text-accent tracking-wide">推送设置</h2>
+        <h2 className="text-base font-semibold text-accent">设置</h2>
         <button onClick={onClose}
           className="text-[12px] px-3 py-1 rounded-md border border-border text-text-dim hover:text-text transition-colors cursor-pointer">
           关闭
@@ -111,33 +111,37 @@ export default function Settings({ onClose }) {
       </div>
       <div className="p-4 space-y-3">
         <UsagePanel admin={admin} />
-        <div>
-          <label className="text-[12px] text-text-dim block mb-1">飞书 Webhook URL</label>
-          <p className="text-[11px] text-text-muted mb-2">
-            飞书群 → 设置 → 群机器人 → 添加机器人 → 自定义机器人 → 复制 Webhook 地址
-          </p>
-          <input
-            className="w-full bg-bg border border-border rounded-lg px-3 py-2 text-[13px] text-text font-mono outline-none focus:border-accent transition-colors"
-            placeholder="https://open.feishu.cn/open-apis/bot/v2/hook/xxxx"
-            value={url} onChange={e => setUrl(e.target.value)}
-          />
-        </div>
-        <div className="flex items-center gap-3">
-          <button onClick={handleSave} disabled={saving}
-            className="px-4 py-1.5 rounded-md bg-accent text-bg font-medium text-[13px] hover:opacity-90 disabled:opacity-50 cursor-pointer">
-            {saving ? '保存中...' : '保存'}
-          </button>
-          <button onClick={handleTest}
-            className="px-4 py-1.5 rounded-md border border-border text-text-dim text-[13px] hover:text-text transition-colors cursor-pointer">
-            发送测试
-          </button>
-          {status.text && (
-            <span className={`text-[12px] font-medium
-              ${status.ok === true ? 'text-bull' : status.ok === false ? 'text-bear' : 'text-text-dim'}`}>
-              {status.text}
-            </span>
-          )}
-        </div>
+        <section aria-labelledby="push-settings-title" className="border-t border-border pt-4 space-y-3">
+          <h3 id="push-settings-title" className="text-sm font-semibold">推送设置</h3>
+          <div>
+            <label htmlFor="feishu-webhook-url" className="text-[12px] text-text-dim block mb-1">飞书 Webhook URL</label>
+            <p className="text-[11px] text-text-muted mb-2">
+              飞书群 → 设置 → 群机器人 → 添加机器人 → 自定义机器人 → 复制 Webhook 地址
+            </p>
+            <input
+              id="feishu-webhook-url"
+              className="w-full bg-bg border border-border rounded-lg px-3 py-2 text-[13px] text-text font-mono outline-none focus:border-accent transition-colors"
+              placeholder="https://open.feishu.cn/open-apis/bot/v2/hook/xxxx"
+              value={url} onChange={e => setUrl(e.target.value)}
+            />
+          </div>
+          <div className="flex items-center gap-3">
+            <button onClick={handleSave} disabled={saving}
+              className="px-4 py-1.5 rounded-md bg-accent text-bg font-medium text-[13px] hover:opacity-90 disabled:opacity-50 cursor-pointer">
+              {saving ? '保存中...' : '保存'}
+            </button>
+            <button onClick={handleTest}
+              className="px-4 py-1.5 rounded-md border border-border text-text-dim text-[13px] hover:text-text transition-colors cursor-pointer">
+              发送测试
+            </button>
+            {status.text && (
+              <span className={`text-[12px] font-medium
+                ${status.ok === true ? 'text-bull' : status.ok === false ? 'text-bear' : 'text-text-dim'}`}>
+                {status.text}
+              </span>
+            )}
+          </div>
+        </section>
 
         {/* 本地代理 (OKX/外发统一) */}
         <div className="mt-2 pt-4 border-t border-border">

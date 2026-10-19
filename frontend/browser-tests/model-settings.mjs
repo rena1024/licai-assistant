@@ -2,6 +2,7 @@
 // 两种模式均不调用模型或修改用户配置。
 // 运行：NODE_PATH=<含 playwright 的 node_modules> node frontend/browser-tests/model-settings.mjs
 // 完整链路：同一命令末尾加 --real-api；需项目 venv 已安装后端依赖。
+// 设置页层级：再加 --settings-layout；可用 SETTINGS_SCREENSHOT 指定截图输出路径。
 import assert from 'node:assert/strict'
 import { createRequire } from 'node:module'
 import { fileURLToPath } from 'node:url'
@@ -14,6 +15,7 @@ import { once } from 'node:events'
 const { chromium } = createRequire(import.meta.url)('playwright')
 const root = fileURLToPath(new URL('../', import.meta.url))
 const realAPI = process.argv.includes('--real-api')
+const settingsLayout = process.argv.includes('--settings-layout')
 const fixture = await mkdtemp(`${root}.model-save-test-`)
 const fixturePath = `/${basename(fixture)}`
 await writeFile(`${fixture}/index.html`, '<!doctype html><html><body><div id="root"></div><script type="module" src="./entry.jsx"></script></body></html>')
@@ -21,12 +23,14 @@ await writeFile(`${fixture}/entry.jsx`, `
   import React from 'react';
   import { createRoot } from 'react-dom/client';
   import ModelSettings from '../src/components/ModelSettings.jsx';
+  import Settings from '../src/components/Settings.jsx';
+  ${settingsLayout ? "import '../src/index.css';" : ''}
   import { setSessionToken } from '../src/hooks/sessionRuntime.js';
   ${realAPI ? `const login = await fetch('/api/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: 'model-tester', password: 'Synthetic-model-test-01!' }) });
   const session = await login.json();
   if (!login.ok) throw new Error('合成账号登录失败：' + JSON.stringify(session));
   setSessionToken(session.csrf_token);` : ''}
-  createRoot(document.getElementById('root')).render(<ModelSettings admin />);
+  createRoot(document.getElementById('root')).render(${settingsLayout ? '<Settings onClose={() => {}} />' : '<ModelSettings admin />'});
 `)
 const server = await createServer({ root, server: { host: '127.0.0.1', port: 18767, strictPort: true,
   ...(realAPI ? { proxy: { '/api': { target: 'http://127.0.0.1:18768', changeOrigin: false } } } : {}) } })
@@ -72,6 +76,25 @@ try {
     return route.fulfill({ json: { models } })
   })
   await page.goto(`http://127.0.0.1:18767${fixturePath}/index.html`)
+  if (settingsLayout) {
+    await page.getByRole('heading', { name: '设置', level: 2, exact: true }).waitFor({ timeout: 3000 })
+    const push = page.getByRole('region', { name: '推送设置', exact: true })
+    await push.getByRole('heading', { name: '推送设置', level: 3, exact: true }).waitFor()
+    await push.getByLabel('飞书 Webhook URL', { exact: true }).waitFor()
+    assert.equal(await push.getByRole('button', { name: '保存', exact: true }).count(), 1)
+    assert.equal(await push.getByRole('button', { name: '发送测试', exact: true }).count(), 1)
+    assert.equal(await push.getByText('用量与预算', { exact: true }).count(), 0)
+    await page.getByRole('heading', { name: '用量与预算', level: 3, exact: true }).waitFor()
+    await page.getByRole('heading', { name: '我的 AI 设置', level: 3, exact: true }).waitFor()
+    await page.getByRole('heading', { name: '账号管理', level: 3, exact: true }).waitFor()
+    assert.equal(await page.getByRole('heading', { level: 2 }).count(), 1)
+    await page.setViewportSize({ width: 390, height: 844 })
+    assert.ok(await push.isVisible())
+    await push.scrollIntoViewIfNeeded()
+    if (process.env.SETTINGS_SCREENSHOT) await page.screenshot({ path: process.env.SETTINGS_SCREENSHOT, animations: 'disabled' })
+    assert.deepEqual(errors, [])
+    console.log('PASS: 设置总标题、预算/推送/AI同级、飞书控件归组及移动端呈现')
+  } else {
   const save = page.getByRole('button', { name: '保存模型', exact: true })
   await save.waitFor()
   await page.getByLabel('模型标识', { exact: true }).fill('local-test')
@@ -119,6 +142,7 @@ try {
   assert.equal(writes, 2)
   assert.deepEqual(errors, [])
   console.log('PASS: 保存中、成功回显、必填/格式校验、失败保留输入')
+  }
   }
 } finally {
   await browser?.close()

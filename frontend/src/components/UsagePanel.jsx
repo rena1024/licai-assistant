@@ -6,7 +6,7 @@ const yuan = value => value == null ? '未配置' : `¥${(value / 1000000).toFix
 export function BudgetSummary({ data }) {
   return <div className="grid gap-3 sm:grid-cols-2">
     {Object.entries(data).map(([scope, periods]) => <div key={scope} className="rounded border border-border p-3">
-      <h3>{scope === 'user' ? '本人预算' : '全局预算'}</h3>
+      <h4 className="text-[12px] font-semibold">{scope === 'user' ? '本人预算' : '全局预算'}</h4>
       {Object.entries(periods).map(([period, row]) => <p key={period} className="my-2 text-sm">
         {period === 'day' ? '当日' : '当月'} · 上限 {yuan(row.limit)}<br />
         已结算估算 {yuan(row.spent)} · 占用 {yuan(row.reserved)} · 可用 {yuan(row.available)}
@@ -58,13 +58,13 @@ export default function UsagePanel({ admin }) {
     } catch (e) { setError(e.message) } finally { setBusy(false) }
   }
   return <section className="border-t border-border pt-4 space-y-3" aria-labelledby="usage-title">
-    <h2 id="usage-title" className="font-semibold">用量与预算</h2>
+    <h3 id="usage-title" className="text-sm font-semibold">用量与预算</h3>
     <p className="text-xs text-text-dim">费用为估算值，以厂商账单为准。待核实费用继续占用预算；明细默认保留 7 天，月汇总长期保留。</p>
     {admin && <label><input type="checkbox" checked={global} onChange={e => setGlobal(e.target.checked)} /> 查看全局计量元数据</label>}
     {data ? <>
       <BudgetSummary data={data.budget} />
       {data.alerts.map(a => <p key={`${a.subject}-${a.kind}-${a.period}-${a.threshold}`} role="status">{a.period} {a.kind === 'day' ? '日' : '月'}预算已达到 {a.threshold}%</p>)}
-      <h3>待结算及待核实</h3>
+      <h4 className="text-[12px] font-semibold">待结算及待核实</h4>
       {data.pending.length === 0 ? <p className="text-sm">暂无</p> : data.pending.map(a => <div key={a.id} className="border border-border rounded p-2 text-sm"><p>{a.model_id} · {a.state === 'unknown' ? '待核实' : '进行中预留'} · {yuan(a.reserved)}</p>
         {admin && a.state === 'unknown' && <details><summary>人工核对</summary><form onSubmit={event => {
           const values = Object.fromEntries(new FormData(event.currentTarget))
@@ -77,15 +77,15 @@ export default function UsagePanel({ admin }) {
           <button disabled={busy} className="text-accent">确认核对并结算</button>
         </form></details>}
       </div>)}
-      <h3>近期调用</h3>
+      <h4 className="text-[12px] font-semibold">近期调用</h4>
       {data.details.length === 0 ? <p className="text-sm">暂无调用明细</p> : <div className="overflow-x-auto"><table className="w-full text-sm"><thead><tr><th>场景 / 模型</th><th>输入 / 输出 Token</th><th>状态</th><th>估算费用</th></tr></thead><tbody>
         {data.details.map(d => <tr key={d.id}><td>{d.scene} / {d.model_id}</td><td>{d.input_tokens ?? '未知'} / {d.output_tokens ?? '未知'}</td><td>{d.state}</td><td>{yuan(d.cost)}</td></tr>)}
       </tbody></table></div>}
-      <h3>月汇总</h3>
+      <h4 className="text-[12px] font-semibold">月汇总</h4>
       {data.monthly.map(m => <p key={`${m.month}-${m.model_id}-${m.scene}`} className="text-sm">{m.month} · {m.scene} / {m.model_id} · {m.calls} 次 · {m.input_tokens} 输入 / {m.output_tokens} 输出 Token</p>)}
     </> : <p role="status">正在读取用量…</p>}
     {admin && <form onSubmit={save} className="space-y-2">
-      <h3>配置额度（人民币）</h3>
+      <h4 className="text-[12px] font-semibold">配置额度（人民币）</h4>
       <label className="block">用户编号（0 为全局）<input name="subject" type="number" required min="0" defaultValue="0" className="ml-2 border border-border bg-bg p-1" /></label>
       <label className="block">日额度<input name="day" type="number" min="0" step="0.000001" className="ml-2 border border-border bg-bg p-1" /></label>
       <label className="block">月额度<input name="month" type="number" min="0" step="0.000001" className="ml-2 border border-border bg-bg p-1" /></label>

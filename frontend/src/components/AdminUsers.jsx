@@ -41,11 +41,11 @@ export default function AdminUsers() {
     if (await execute(url, 'POST', data)) { form.reset(); setReset(null) }
   }
   return <section className="mt-4 border-t border-border pt-4" aria-labelledby="admin-users-title">
-    <h2 id="admin-users-title" className="font-semibold">账号管理</h2>
+    <h3 id="admin-users-title" className="text-sm font-semibold">账号管理</h3>
     <p className="my-2 text-xs text-text-dim">停用保留数据并停止后续任务；重新启用不补跑。临时密码由使用者首次登录后修改。</p>
     <UserList users={users} busy={busy} onReset={setReset} onActive={user => execute(`/api/admin/users/${user.id}/active`, 'PUT', { active: !user.active })} />
     <form onSubmit={submit} className="mt-3 space-y-3">
-      <h3 className="text-sm">{reset ? `重置 ${reset.username} 的临时密码` : '创建普通账号'}</h3>
+      <h4 className="text-[12px] font-semibold">{reset ? `重置 ${reset.username} 的临时密码` : '创建普通账号'}</h4>
       {!reset && <label className="block text-sm">账号名<input name="username" required minLength={3} maxLength={64} autoComplete="off" className="w-full rounded border border-border bg-surface-2 px-3 py-2" /></label>}
       <label className="block text-sm">临时密码<input key={reset?.id || 'new'} name="password" type="password" required minLength={4} maxLength={128} autoComplete="new-password" className="w-full rounded border border-border bg-surface-2 px-3 py-2" /></label>
       <button disabled={busy} className="rounded bg-accent px-3 py-2 text-bg">{busy ? '处理中…' : reset ? '重置临时密码' : '创建账号'}</button>
