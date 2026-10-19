@@ -47,6 +47,11 @@ function ModelServices({ models, reload, execute, busy }) {
     const values = Object.fromEntries(new FormData(form))
     const local = protocol === 'ollama'
     const price = local ? null : { ...Object.fromEntries(['input', 'output', 'cache_read', 'cache_write', 'exchange_rate', 'currency'].map(k => [k, values[k]])), cache_write_1h: values.cache_write_1h || null }
+    if (protocol === 'deepseek') {
+      // 统一计价结构中，cache_read 对应缓存命中输入；DeepSeek 没有独立写入计费。
+      price.cache_write = '0'
+      price.cache_write_1h = null
+    }
     const payload = { id: values.id, protocol, endpoint: values.endpoint.trim().replace(/\/$/, ''), model: values.model,
       local, enabled: values.enabled === 'on', api_key: values.api_key, capabilities: Object.keys(capabilities).filter(c => values[c] === 'on'),
       context_limit: Number(values.context_limit), price, expected_version: editing?.version || 0 }
@@ -95,8 +100,8 @@ function ModelServices({ models, reload, execute, busy }) {
       <label>API Key（留空保留）<input name="api_key" type="password" autoComplete="new-password" className={inputClass} /></label>
       {protocol !== 'ollama' && <>
         <label>原币<select name="currency" defaultValue={editing?.price?.currency || 'CNY'} className={inputClass}><option>CNY</option><option>USD</option></select></label>
-        {['exchange_rate', 'input', 'output', 'cache_read', 'cache_write'].map(k => <label key={k}>{({ exchange_rate: '人民币汇率', input: '输入单价', output: '输出单价', cache_read: '缓存读取单价', cache_write: '缓存写入单价' })[k]}<input name={k} required type="number" min={k === 'exchange_rate' ? '0.000001' : '0'} step="any" defaultValue={editing?.price?.[k] || ''} className={inputClass} /></label>)}
-        <label>一小时缓存写入单价（可选）<input name="cache_write_1h" type="number" min="0" step="any" defaultValue={editing?.price?.cache_write_1h ?? ''} className={inputClass} /></label>
+        {(protocol === 'deepseek' ? ['exchange_rate', 'cache_read', 'input', 'output'] : ['exchange_rate', 'input', 'output', 'cache_read', 'cache_write']).map(k => <label key={k}>{({ exchange_rate: '人民币汇率', input: protocol === 'deepseek' ? '缓存未命中输入单价' : '输入单价', output: '输出单价', cache_read: protocol === 'deepseek' ? '缓存命中输入单价' : '缓存读取单价', cache_write: '缓存写入单价' })[k]}<input name={k} required type="number" min={k === 'exchange_rate' ? '0.000001' : '0'} step="any" defaultValue={editing?.price?.[k] ?? ''} className={inputClass} /></label>)}
+        {protocol !== 'deepseek' && <label>一小时缓存写入单价（可选）<input name="cache_write_1h" type="number" min="0" step="any" defaultValue={editing?.price?.cache_write_1h ?? ''} className={inputClass} /></label>}
       </>}
       <fieldset className="sm:col-span-2"><legend>开放能力</legend>{Object.entries(capabilities).map(([key, label]) => <label key={key} className="mr-4"><input type="checkbox" name={key} defaultChecked={editing ? editing.capabilities.includes(key) : key === 'text'} /> {label}</label>)}</fieldset>
       <label><input type="checkbox" name="enabled" defaultChecked={editing ? editing.enabled : true} /> 开放此模型</label>
