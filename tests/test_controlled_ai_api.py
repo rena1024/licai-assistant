@@ -52,6 +52,28 @@ def test_diagnostic_uses_global_budget_and_persists_capability_result(owners,mon
     assert len(seen)==1
 
 
+def test_saved_ollama_model_is_readable_after_relogin_and_preference_selection(owners):
+    """使用前端表单的完整请求，验证写库、列表及新会话，而非伪造保存响应。"""
+    from run import app
+    payload = dict(id='local_ollama', protocol='ollama', endpoint='http://localhost:11434',
+                   model='qwen3:8b', local=True, enabled=True, api_key='',
+                   capabilities=['text'], context_limit=32768, price=None, expected_version=0)
+    with TestClient(app) as client:
+        login(client, 'owner-a', 'Synthetic-password-01!')
+        saved = client.put('/api/models', json=payload)
+        assert saved.status_code == 200
+        listed = client.get('/api/models').json()['models']
+        assert [(m['id'], m['model'], m['version']) for m in listed] == [('local_ollama', 'qwen3:8b', 1)]
+        assert client.get('/api/models/preferences').json()['scenes'] == {}
+        prefs = client.put('/api/models/preferences', json=dict(
+            local_only=True, scenes={'ask': ['local_ollama']}, expected_version=0))
+        assert prefs.status_code == 200
+    with TestClient(app) as client:
+        login(client, 'owner-a', 'Synthetic-password-01!')
+        assert client.get('/api/models').json()['models'][0]['id'] == 'local_ollama'
+        assert client.get('/api/models/preferences').json()['scenes']['ask'] == ['local_ollama']
+
+
 def test_policy_is_admin_only_and_persists_local_concurrency(owners):
     from run import app
     a,b,_=owners

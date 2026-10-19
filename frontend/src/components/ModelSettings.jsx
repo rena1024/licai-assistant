@@ -27,8 +27,11 @@ function ModelServices({ models, reload, execute, busy }) {
   const [editing, setEditing] = useState(null)
   const [protocol, setProtocol] = useState('ollama')
   const [result, setResult] = useState('')
+  const [validationError, setValidationError] = useState('')
+  const [saving, setSaving] = useState(false)
   const submit = async event => {
     event.preventDefault()
+    setResult(''); setValidationError('')
     const form = event.currentTarget
     const values = Object.fromEntries(new FormData(form))
     const local = protocol === 'ollama'
@@ -36,7 +39,15 @@ function ModelServices({ models, reload, execute, busy }) {
     const payload = { id: values.id, protocol, endpoint: values.endpoint.trim().replace(/\/$/, ''), model: values.model,
       local, enabled: values.enabled === 'on', api_key: values.api_key, capabilities: Object.keys(capabilities).filter(c => values[c] === 'on'),
       context_limit: Number(values.context_limit), price, expected_version: editing?.version || 0 }
-    if (await execute('/api/models', 'PUT', payload)) { form.reset(); setEditing(null); setProtocol('ollama'); await reload() }
+    setSaving(true)
+    try {
+      if (await execute('/api/models', 'PUT', payload)) {
+        form.reset(); setEditing(null); setProtocol('ollama')
+        setResult(`模型 ${payload.id} 已保存`)
+        try { await reload() }
+        catch { setValidationError('模型已保存，但列表刷新失败，请刷新页面查看。') }
+      }
+    } finally { setSaving(false) }
   }
   return <section className="space-y-3 border-t border-border pt-3">
     <h3 className="font-semibold">管理：模型服务</h3>
@@ -51,15 +62,21 @@ function ModelServices({ models, reload, execute, busy }) {
         if (response) { setResult(`${m.id} ${capabilities[capability]}测试通过`); await reload() }
       }} className="mr-3 text-accent">测试{capabilities[capability]}</button>)}
     </div>)}
-    {result && <p role="status">{result}</p>}
-    <form key={editing ? `${editing.id}-${editing.version}` : 'new'} onSubmit={submit} className="grid gap-3 sm:grid-cols-2">
+    <form key={editing ? `${editing.id}-${editing.version}` : 'new'} onSubmit={submit} onInvalid={event => {
+      setResult('')
+      const field = event.target
+      // 原生校验会阻止 submit，需在保存按钮旁说明未发起请求的原因。
+      const firstInvalid = event.currentTarget.querySelector(':invalid')
+      if (field === firstInvalid) setValidationError(`${field.labels?.[0]?.textContent || '模型配置'}：${field.validationMessage}`)
+    }} className="grid gap-3 sm:grid-cols-2">
       <h4 className="sm:col-span-2">{editing ? `编辑 ${editing.id}` : '新增模型'}</h4>
-      <label>模型标识<input name="id" required pattern="[a-zA-Z0-9_-]{1,64}" readOnly={!!editing} defaultValue={editing?.id || ''} className={inputClass} /></label>
+      <label>模型标识<input name="id" required pattern="[a-zA-Z0-9_\-]{1,64}" title="请输入 1–64 位英文字母、数字、下划线或连字符，例如 local-qwen" aria-describedby="model-id-help" readOnly={!!editing} defaultValue={editing?.id || ''} className={inputClass} /></label>
       <label>协议<select value={protocol} onChange={e => setProtocol(e.target.value)} className={inputClass}>
         {['ollama', 'anthropic', 'openai', 'deepseek', 'qwen', 'gemini', 'openai_compatible'].map(p => <option key={p}>{p}</option>)}
       </select></label>
       <label>服务基础地址<input name="endpoint" type="url" required defaultValue={editing?.endpoint || 'http://localhost:11434'} className={inputClass} /></label>
       <label>厂商模型 ID<input name="model" required defaultValue={editing?.model || ''} className={inputClass} /></label>
+      <p id="model-id-help" className="sm:col-span-2 text-xs text-text-dim">模型标识是自定义名称，仅支持 1–64 位英文字母、数字、下划线或连字符，例如 local-qwen；qwen3:4b 等实际名称请填写在“厂商模型 ID”。</p>
       <label>上下文 Token 上限<input name="context_limit" type="number" min="1024" max="2000000" required defaultValue={editing?.context_limit || 32768} className={inputClass} /></label>
       <label>API Key（留空保留）<input name="api_key" type="password" autoComplete="new-password" className={inputClass} /></label>
       {protocol !== 'ollama' && <>
@@ -69,8 +86,10 @@ function ModelServices({ models, reload, execute, busy }) {
       </>}
       <fieldset className="sm:col-span-2"><legend>开放能力</legend>{Object.entries(capabilities).map(([key, label]) => <label key={key} className="mr-4"><input type="checkbox" name={key} defaultChecked={editing ? editing.capabilities.includes(key) : key === 'text'} /> {label}</label>)}</fieldset>
       <label><input type="checkbox" name="enabled" defaultChecked={editing ? editing.enabled : true} /> 开放此模型</label>
-      <div><button disabled={busy} className="rounded bg-accent px-3 py-2 text-bg">保存模型</button>{editing && <button type="button" onClick={() => { setEditing(null); setProtocol('ollama') }} className="ml-3">取消编辑</button>}</div>
+      <div><button type="submit" disabled={busy || saving} className="rounded bg-accent px-3 py-2 text-bg">{saving ? '正在保存模型…' : '保存模型'}</button>{editing && <button type="button" disabled={busy || saving} onClick={() => { setEditing(null); setProtocol('ollama') }} className="ml-3">取消编辑</button>}</div>
     </form>
+    {result && <p role="status">{result}</p>}
+    {validationError && <p role="alert">{validationError}</p>}
   </section>
 }
 
