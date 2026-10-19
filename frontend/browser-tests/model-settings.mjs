@@ -97,6 +97,18 @@ try {
   } else {
   const save = page.getByRole('button', { name: '保存模型', exact: true })
   await save.waitFor()
+  const protocol = page.getByRole('combobox', { name: /^协议/ })
+  const endpoint = page.getByLabel('服务基础地址', { exact: true })
+  for (const [name, address] of Object.entries({
+    anthropic: 'https://api.anthropic.com', openai: 'https://api.openai.com',
+    deepseek: 'https://api.deepseek.com', qwen: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+    gemini: 'https://generativelanguage.googleapis.com', openai_compatible: '',
+    ollama: 'http://localhost:11434',
+  })) {
+    await protocol.selectOption(name)
+    assert.equal(await endpoint.inputValue(), address, `${name} 切换后应填入对应地址`)
+  }
+  await endpoint.fill('http://127.0.0.1:11434')
   await page.getByLabel('模型标识', { exact: true }).fill('local-test')
   await page.getByLabel('厂商模型 ID', { exact: true }).fill('qwen3:4b')
   await save.click()
@@ -111,6 +123,10 @@ try {
     await page.reload()
     await page.getByRole('button', { name: '编辑 local-test', exact: true }).waitFor()
     assert.equal(await page.getByLabel('问答主模型').locator('option[value="local-test"]').count(), 1)
+    await page.getByRole('button', { name: '编辑 local-test', exact: true }).click()
+    assert.equal(await endpoint.inputValue(), 'http://127.0.0.1:11434', '编辑时应保留保存的自定义地址')
+    await page.getByRole('button', { name: '取消编辑', exact: true }).click()
+    assert.equal(await endpoint.inputValue(), 'http://localhost:11434')
     assert.deepEqual(errors, [])
     console.log('PASS: 真实登录 → 表单保存 → SQLite 写入/读回 → 模型列表及场景选项 → 刷新后仍存在')
   } else {

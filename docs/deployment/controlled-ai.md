@@ -17,15 +17,19 @@
 
 ## 基础地址和协议
 
+切换协议时，表单自动填入下表对应的默认基础地址，仍可手动修改；打开已有模型的编辑表单时保留其已保存地址。Qwen 默认北京地域，自定义 OpenAI 兼容协议留空，按账号地域或服务商要求填写。此操作只修改待保存表单，不发起模型调用。
+
 | 协议 | 基础地址示例 | 应用追加路径 |
 |---|---|---|
 | Ollama | `http://localhost:11434`；Docker 使用 `http://host.docker.internal:11434` | `/api/show` 验证本地模型、`/api/chat` 推理 |
 | Anthropic | `https://api.anthropic.com` | `/v1/messages` |
 | OpenAI Responses | `https://api.openai.com` | `/v1/responses` |
 | DeepSeek | `https://api.deepseek.com` | `/chat/completions` |
-| 通义千问兼容模式 | 账号对应地域的 `https://…/compatible-mode/v1` | `/chat/completions` |
+| 通义千问兼容模式 | 默认北京 `https://dashscope.aliyuncs.com/compatible-mode/v1`；其他地域按账号修改 | `/chat/completions` |
 | Gemini 原生 | `https://generativelanguage.googleapis.com` | `/v1beta/models/{model}:generateContent` |
 | 自定义 OpenAI 兼容 | 管理员指定的 HTTPS 基础端点，包含服务要求的版本前缀 | `/chat/completions` |
+
+默认地址依据：[OpenAI Responses](https://developers.openai.com/api/reference/resources/responses/methods/create)、[Claude API](https://platform.claude.com/docs/en/api/overview)、[DeepSeek API](https://api-docs.deepseek.com/)、[Qwen 地域地址](https://help.aliyun.com/zh/model-studio/base-url)、[Gemini generateContent](https://ai.google.dev/api/generate-content)、[Ollama 本机地址](https://github.com/ollama/ollama/blob/main/docs/faq.mdx)。基础地址的路径前缀按本项目适配器配套填写，不直接复制其他 SDK 的示例前缀。
 
 自定义接入必须显式选协议，不通过换域名猜测协议。端点不允许用户名、密码、查询串或片段；云端不能解析为本机或内网地址，重定向不自动跟随。只从管理员指定的模型配置读取凭证。凭证包含在本机数据库及备份中，沿用已有文件权限与备份保护。
 

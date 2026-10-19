@@ -4,6 +4,16 @@ import { fetchJSON } from '../hooks/useApi'
 export const sceneNames = { ask: '问答', briefing: '持仓简报', fundamental: '基本面分析', scanner: '形态审核', multi_lens: '多视角分析', rules: '个人规则', news: '资讯解读', portfolio: '组合复盘', market: '市场分析', sector: '板块解读' }
 const capabilities = { text: '文本', tools: '工具', image: '图像', structured: '结构化输出' }
 const inputClass = 'w-full rounded border border-border bg-bg px-2 py-2 text-sm'
+// 基础地址须与后端适配器追加的协议路径配套；Qwen 默认使用北京地域。
+const defaultEndpoints = {
+  ollama: 'http://localhost:11434',
+  anthropic: 'https://api.anthropic.com',
+  openai: 'https://api.openai.com',
+  deepseek: 'https://api.deepseek.com',
+  qwen: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+  gemini: 'https://generativelanguage.googleapis.com',
+  openai_compatible: '',
+}
 
 export function ModelChoices({ scene, ids, models, onChange }) {
   return <fieldset className="rounded border border-border p-3 space-y-2">
@@ -26,6 +36,7 @@ export function ModelChoices({ scene, ids, models, onChange }) {
 function ModelServices({ models, reload, execute, busy }) {
   const [editing, setEditing] = useState(null)
   const [protocol, setProtocol] = useState('ollama')
+  const [endpoint, setEndpoint] = useState(defaultEndpoints.ollama)
   const [result, setResult] = useState('')
   const [validationError, setValidationError] = useState('')
   const [saving, setSaving] = useState(false)
@@ -42,7 +53,7 @@ function ModelServices({ models, reload, execute, busy }) {
     setSaving(true)
     try {
       if (await execute('/api/models', 'PUT', payload)) {
-        form.reset(); setEditing(null); setProtocol('ollama')
+        form.reset(); setEditing(null); setProtocol('ollama'); setEndpoint(defaultEndpoints.ollama)
         setResult(`模型 ${payload.id} 已保存`)
         try { await reload() }
         catch { setValidationError('模型已保存，但列表刷新失败，请刷新页面查看。') }
@@ -55,7 +66,7 @@ function ModelServices({ models, reload, execute, busy }) {
     {models.map(m => <div key={m.id} className="rounded border border-border p-2 text-sm">
       <p>{m.id} · {m.model} · v{m.version} · {m.local ? '本地' : '云端'} · {m.enabled ? '已开放' : '已停用'}</p>
       <p>{m.capabilities.map(c => capabilities[c]).join(' / ')} · {m.validation_status || '尚未真实联调'}</p>
-      <button type="button" disabled={busy} onClick={() => { setEditing(m); setProtocol(m.protocol) }} className="mr-3 text-accent">编辑 {m.id}</button>
+      <button type="button" disabled={busy} onClick={() => { setEditing(m); setProtocol(m.protocol); setEndpoint(m.endpoint) }} className="mr-3 text-accent">编辑 {m.id}</button>
       {m.capabilities.map(capability => <button key={capability} type="button" disabled={busy} onClick={async () => {
         if (!confirm(`将对 ${m.id} 发送测试请求，云端测试可能产生费用并占用全局预算。继续？`)) return
         const response = await execute(`/api/models/${encodeURIComponent(m.id)}/test`, 'POST', { capability })
@@ -71,11 +82,14 @@ function ModelServices({ models, reload, execute, busy }) {
     }} className="grid gap-3 sm:grid-cols-2">
       <h5 className="sm:col-span-2 text-[12px] font-medium">{editing ? `编辑 ${editing.id}` : '新增模型'}</h5>
       <label>模型标识<input name="id" required pattern="[a-zA-Z0-9_\-]{1,64}" title="请输入 1–64 位英文字母、数字、下划线或连字符，例如 local-qwen" aria-describedby="model-id-help" readOnly={!!editing} defaultValue={editing?.id || ''} className={inputClass} /></label>
-      <label>协议<select value={protocol} onChange={e => setProtocol(e.target.value)} className={inputClass}>
-        {['ollama', 'anthropic', 'openai', 'deepseek', 'qwen', 'gemini', 'openai_compatible'].map(p => <option key={p}>{p}</option>)}
+      <label>协议<select value={protocol} onChange={e => {
+        setProtocol(e.target.value); setEndpoint(defaultEndpoints[e.target.value])
+      }} className={inputClass}>
+        {Object.keys(defaultEndpoints).map(p => <option key={p}>{p}</option>)}
       </select></label>
-      <label>服务基础地址<input name="endpoint" type="url" required defaultValue={editing?.endpoint || 'http://localhost:11434'} className={inputClass} /></label>
+      <label>服务基础地址<input name="endpoint" type="url" required value={endpoint} onChange={e => setEndpoint(e.target.value)} aria-describedby="model-endpoint-help" placeholder={protocol === 'openai_compatible' ? 'https://example.com/v1' : undefined} className={inputClass} /></label>
       <label>厂商模型 ID<input name="model" required defaultValue={editing?.model || ''} className={inputClass} /></label>
+      <p id="model-endpoint-help" className="sm:col-span-2 text-xs text-text-dim">切换协议会填入默认基础地址，仍可手动修改。{protocol === 'qwen' ? 'Qwen 默认北京地域，其他地域请按账号修改地址。' : protocol === 'openai_compatible' ? '自定义兼容服务请填写服务商提供的基础地址。' : '请求路径由系统自动追加。'}</p>
       <p id="model-id-help" className="sm:col-span-2 text-xs text-text-dim">模型标识是自定义名称，仅支持 1–64 位英文字母、数字、下划线或连字符，例如 local-qwen；qwen3:4b 等实际名称请填写在“厂商模型 ID”。</p>
       <label>上下文 Token 上限<input name="context_limit" type="number" min="1024" max="2000000" required defaultValue={editing?.context_limit || 32768} className={inputClass} /></label>
       <label>API Key（留空保留）<input name="api_key" type="password" autoComplete="new-password" className={inputClass} /></label>
@@ -86,7 +100,7 @@ function ModelServices({ models, reload, execute, busy }) {
       </>}
       <fieldset className="sm:col-span-2"><legend>开放能力</legend>{Object.entries(capabilities).map(([key, label]) => <label key={key} className="mr-4"><input type="checkbox" name={key} defaultChecked={editing ? editing.capabilities.includes(key) : key === 'text'} /> {label}</label>)}</fieldset>
       <label><input type="checkbox" name="enabled" defaultChecked={editing ? editing.enabled : true} /> 开放此模型</label>
-      <div><button type="submit" disabled={busy || saving} className="rounded bg-accent px-3 py-2 text-bg">{saving ? '正在保存模型…' : '保存模型'}</button>{editing && <button type="button" disabled={busy || saving} onClick={() => { setEditing(null); setProtocol('ollama') }} className="ml-3">取消编辑</button>}</div>
+      <div><button type="submit" disabled={busy || saving} className="rounded bg-accent px-3 py-2 text-bg">{saving ? '正在保存模型…' : '保存模型'}</button>{editing && <button type="button" disabled={busy || saving} onClick={() => { setEditing(null); setProtocol('ollama'); setEndpoint(defaultEndpoints.ollama) }} className="ml-3">取消编辑</button>}</div>
     </form>
     {result && <p role="status">{result}</p>}
     {validationError && <p role="alert">{validationError}</p>}
