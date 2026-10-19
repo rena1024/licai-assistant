@@ -104,10 +104,11 @@ def _build_user_prompt(*, stock_code: str, stock_name: str, current_price: float
                        currency: str = "CNY", session_line: str = "") -> str:
     sym, unit = _CCY.get(currency, ("", currency))
     unit_note = "" if currency == "CNY" else f"(单位: {unit})"
+    pnl_label=f"{pnl_pct:+.2f}%" if pnl_pct is not None else "不可得（缺少成本基准）"
     parts = [
         f"## 标的\n{stock_name}({stock_code}) · 行业: {sector or '未知'}",
         f"\n## 当前持仓{unit_note}\n成本 {sym}{cost_price:.2f} × {shares} 股 = {sym}{cost_price*shares:,.0f}\n"
-        f"现价 {sym}{current_price:.2f} | 浮动盈亏 {pnl_pct:+.2f}%",
+        f"报价 {sym}{current_price:.2f} | 浮动盈亏 {pnl_label}",
     ]
     if session_line:
         parts.append(f"\n## 行情\n{session_line}")
@@ -191,7 +192,7 @@ async def generate_briefing_for_stock(stock_code: str, stock_name: str,
     if isinstance(sector_news, Exception): sector_news = []
     if isinstance(health, Exception): health = None
 
-    pnl_pct = (current_price - cost_price) / cost_price * 100 if cost_price > 0 else 0
+    pnl_pct = (current_price - cost_price) / cost_price * 100 if cost_price > 0 else None
     kline_stats = _kline_summary(hist_df)
 
     user_prompt = _build_user_prompt(
@@ -202,6 +203,7 @@ async def generate_briefing_for_stock(stock_code: str, stock_name: str,
         announcements=announcements or [], health=health,
     )
 
+    user_prompt += _quote_context(quote)
     try:
         raw = await asyncio.to_thread(
             call_claude, user_prompt, SYSTEM_PROMPT,
@@ -225,7 +227,7 @@ async def generate_briefing_for_stock(stock_code: str, stock_name: str,
         "stock_name": stock_name,
         "current_price": current_price,
         "cost_price": cost_price,
-        "pnl_pct": round(pnl_pct, 2),
+        "pnl_pct": round(pnl_pct, 2) if pnl_pct is not None else None,
         "sector": sector,
         "signal": parsed.get("signal", "中性"),
         "summary": parsed.get("summary", ""),
@@ -255,7 +257,7 @@ async def _briefing_foreign(stock_code: str, stock_name: str, cost_price: float,
         return_exceptions=True)
     if isinstance(hist_df, Exception): hist_df = None
     if isinstance(news, Exception): news = []
-    pnl_pct = (current_price - cost_price) / cost_price * 100 if cost_price > 0 else 0
+    pnl_pct = (current_price - cost_price) / cost_price * 100 if cost_price > 0 else None
     kline_stats = _kline_summary(hist_df)
     session_line = _session_line(stock_code, quote)
     user_prompt = _build_user_prompt(
@@ -263,6 +265,7 @@ async def _briefing_foreign(stock_code: str, stock_name: str, cost_price: float,
         current_price=current_price, cost_price=cost_price, shares=shares,
         pnl_pct=pnl_pct, kline_stats=kline_stats, news=news or [], sector_news=[],
         announcements=[], health=None, currency=code_currency(stock_code), session_line=session_line)
+    user_prompt += _quote_context(quote)
     base = {"stock_code": stock_code, "stock_name": stock_name, "currency": code_currency(stock_code)}
     try:
         parsed = await _ask(user_prompt)
@@ -270,7 +273,7 @@ async def _briefing_foreign(stock_code: str, stock_name: str, cost_price: float,
         return {**base, "error": f"生成失败: {type(e).__name__}: {str(e)[:100]}", "signal": "中性",
                 "summary": "LLM 调用失败", "points": [], "risk": "", "confidence": "low"}
     return {**base, "current_price": current_price, "cost_price": cost_price,
-            "pnl_pct": round(pnl_pct, 2), "sector": sector, "session": session_line,
+            "pnl_pct": round(pnl_pct, 2) if pnl_pct is not None else None, "sector": sector, "session": session_line,
             "signal": parsed.get("signal", "中性"), "summary": parsed.get("summary", ""),
             "points": parsed.get("points", []), "risk": parsed.get("risk", ""),
             "confidence": parsed.get("confidence", "med"), "kline_stats": kline_stats,
@@ -316,7 +319,10 @@ async def generate_all_briefings() -> list[dict]:
         q = quotes.get(code) or {}
         cur = q.get("price") or 0
         if cur <= 0:
-            cur = h.get("cost_price", 0)
+            missing=_missing_quote_briefing(code,h.get('stock_name',''),today)
+            await save_briefing(code,today,json.dumps(missing,ensure_ascii=False),user_id=require_user_id())
+            results.append(missing)
+            continue
         try:
             briefing = await generate_briefing_for_stock(
                 code, h.get("stock_name", "") or q.get("stock_name", ""),
@@ -333,15 +339,33 @@ async def generate_all_briefings() -> list[dict]:
         q = quotes.get(code) or {}
         cur = q.get("price") or 0
         if cur <= 0:
-            cur = e["cost_price"]
+            missing=_missing_quote_briefing(code,e.get('name',''),today)
+            await save_briefing(code,today,json.dumps(missing,ensure_ascii=False),user_id=require_user_id())
+            results.append(missing)
+            continue
         try:
             briefing = await generate_briefing_for_stock(
                 code, e["name"], cost_price=e["cost_price"], shares=float(e["shares"]),
-                current_price=cur, sector_hint=e["theme"])
+                current_price=cur, sector_hint=e["theme"],quote=q)
             briefing["briefing_date"] = today
             briefing["asset_class"] = "etf"
             await save_briefing(code, today, json.dumps(briefing, ensure_ascii=False), user_id=require_user_id())
             results.append(briefing)
         except Exception as ex:
             print(f"[briefing] etf {code} failed: {ex}")
+    if results:
+        from services.notifications import emit
+        await emit('briefing',today,title='个人简报已更新',body='个人简报已生成，请在开盘情绪或简报页面查看。')
     return results
+
+
+def _quote_context(quote):
+    q=quote or {}
+    data={key:q.get(key) for key in ('source_id','source_at','fetched_at','quality','stale_reason','currency')}
+    return '\n数据质量限制：'+json.dumps(data,ensure_ascii=False)+'。非 fresh 不得称最新实时；旧值只作降级参考，财报按报告期、新闻按原始发布时间引用。'
+
+
+def _missing_quote_briefing(code,name,day):
+    return {'stock_code':code,'stock_name':name,'briefing_date':day,'current_price':None,'pnl_pct':None,
+            'error':'报价缺失，未以成本价代替现价，未调用模型','summary':'报价缺失，无法生成完整收益判断',
+            'signal':'中性','points':[],'risk':'缺少有效行情','confidence':'low','quote_quality':'missing'}

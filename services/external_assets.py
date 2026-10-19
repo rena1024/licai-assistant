@@ -199,7 +199,8 @@ async def _fetch_onchain_etf_quote(code: str) -> dict | None:
         "change_pct": q.get("change_pct", 0),
         "nav_date": "",
         "est_time": "",
-        "realtime": True,
+        "realtime": q.get("quality") == "fresh",
+        **{key:q.get(key) for key in ("source_id","source_at","fetched_at","quality","stale_reason")},
         "source": "onchain",   # 标记数据来源
     }
 

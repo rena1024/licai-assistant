@@ -164,7 +164,7 @@ def _host_is_public(host: str) -> bool:
         return False
 
 
-def extract_article_text(url: str, timeout: int = 10) -> dict | None:
+def extract_article_text(url: str, timeout: int = 10, *, before_request=None) -> dict | None:
     """直连抓 HTML, 用 BeautifulSoup 按 <p> 文本密度定位正文容器并抽正文。
     导航/面包屑/分享条/APP推广都在正文容器之外, 整块天然剔除 —— 比对整页
     markdown 做行级启发式清洗稳得多。服务端渲染的中文新闻站(东财/界面/新浪/
@@ -177,9 +177,13 @@ def extract_article_text(url: str, timeout: int = 10) -> dict | None:
         # 重定向手动跟随, 每一跳都做 SSRF 校验(入口校验只覆盖首跳, 302 跳内网就绕过了)
         cur, r = url, None
         for _ in range(5):
+            if before_request:
+                before_request()
             pu = urlparse(cur)
             if pu.scheme not in ("http", "https") or not pu.hostname or not _host_is_public(pu.hostname):
                 return None
+            if before_request:
+                before_request()
             r = s.get(cur, timeout=timeout, headers={"User-Agent": _ARTICLE_UA},
                       allow_redirects=False)
             if r.is_redirect or r.is_permanent_redirect:
@@ -225,3 +229,22 @@ def extract_article_text(url: str, timeout: int = 10) -> dict | None:
         return {"title": title, "text": body.strip(), "via": "dom"}
     except Exception:
         return None
+
+
+def aggregate_items(groups,*,fetched_at=None):
+    """多源资讯去重仍保留每个原媒体、链接和发布时间；未知时间不冒充最新。"""
+    from datetime import datetime,timezone
+    fetched_at=fetched_at or datetime.now(timezone.utc).isoformat()
+    merged={}
+    for provider,items in groups:
+        for item in items:
+            title=item.get('title','').strip()
+            if not title:
+                continue
+            source={'provider':provider,'source':item.get('source') or provider,
+                    'url':item.get('url') or None,'source_at':item.get('time') or None}
+            if title not in merged:
+                merged[title]={**item,'source_at':item.get('time') or None,'fetched_at':fetched_at,'sources':[]}
+            if source not in merged[title]['sources']:
+                merged[title]['sources'].append(source)
+    return sorted(merged.values(),key=lambda x:x.get('time') or '',reverse=True)

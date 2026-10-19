@@ -100,26 +100,19 @@ async def get_fund_top10(fund_code: str, force: bool = False) -> list[dict]:
 
 
 async def fetch_holding_quote(holding: dict) -> dict | None:
-    """单只成分股实时报价。返回 {code, market, change_pct, price}."""
-    market = holding["market"]
-    code = holding["code"]
-    quote = None
-    try:
-        if market == "HK":
-            from services.market_data import _fetch_hk_stock_quote
-            quote = await asyncio.to_thread(_fetch_hk_stock_quote, code)
-        elif market == "US":
-            from services.market_data import _fetch_us_stock_quote
-            quote = await asyncio.to_thread(_fetch_us_stock_quote, code)
-        elif market in ("CN_SH", "CN_SZ"):
-            from services.market_data import get_realtime_quotes
-            r = await get_realtime_quotes([code])
-            q = r.get(code)
-            if q:
-                quote = {"price": q["price"], "change_pct": q["change_pct"]}
-    except Exception as e:
-        print(f"[holding-quote] {market}/{code} failed: {e}")
+    """成分股与持仓页面使用相同来源策略，并保留源时刻与质量。"""
+    from services.market_data import get_realtime_quotes,normalize_stock_code
+    market,code=holding['market'],holding['code']
+    if market=='HK':
+        symbol=normalize_stock_code('HK.'+code)
+    elif market=='US':
+        symbol=normalize_stock_code('US.'+code)
+    elif market in ('CN_SH','CN_SZ'):
+        symbol=normalize_stock_code(code)
+    else:
         return None
-    if not quote:
+    quote=(await get_realtime_quotes([symbol])).get(symbol)
+    if not quote or not quote.get('price'):
         return None
-    return {**holding, **quote}
+    return {**holding,**{key:quote.get(key) for key in
+        ('price','change_pct','quality','source_id','source_at','fetched_at','market_state','stale_reason')}}

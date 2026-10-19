@@ -61,6 +61,8 @@ async def _once(name, day, callback):
 
 
 async def personal_tick():
+    from services.notification_delivery import migrate_legacy
+    await migrate_legacy()
     from services.user_context import require_user_id
     from services.dca import fire_due_dcas
     from api.assets_routes import settle_pending_dca
@@ -75,6 +77,8 @@ async def personal_tick():
         await _once('settle',today,settle_pending_dca)
     await ensure_active()
     await maybe_snapshot()
+    from services.notifications import check_personal_risk
+    await check_personal_risk()
     key = 'task_done:curve_window'
     window = str(int(now.timestamp()) // 1200)
     if await get_user_setting(key,user_id=require_user_id()) != window:

@@ -24,20 +24,24 @@ async def take_snapshot() -> dict | None:
         for h in await list_holdings():
             h = h if isinstance(h, dict) else h.model_dump()
             mv = h.get("market_value")
+            if (h.get("shares") or 0)>0 and (mv is None or h.get("quote_quality") in ("stale","missing","unknown","delayed")):
+                return None  # 缺失/旧价不能写成完整组合快照，保留上一份有依据的快照。
             if mv and (h.get("shares") or 0) > 0 and h.get("stock_code"):
                 by[f"A:{h['stock_code']}"] = round(float(mv), 2)
     except Exception:
-        pass
+        return None
     # 外部资产(基金/理财/现金/加密/机器人, 用看板同一套 enrich)
     try:
         from api.assets_routes import list_assets
         d = await list_assets()
         for a in (d.get("assets") or []):
             cv = a.get("current_value")
+            if cv is None:
+                return None
             if cv is not None and a.get("id") is not None:
                 by[f"EXT:{a['id']}"] = round(float(cv), 2)
     except Exception:
-        pass
+        return None
     if not by:
         return None
     total = round(sum(by.values()), 2)

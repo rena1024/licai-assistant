@@ -67,6 +67,8 @@ def _replace_current(point,actor_id):
                 with closing(sqlite3.connect(source)) as current:
                     from services.llm_recovery import preserve_finance
                     preserve_finance(current,restored)
+                    from services.c_recovery import preserve_data_controls
+                    preserve_data_controls(current,restored)
                 restored.execute('UPDATE sessions SET revoked_at=? WHERE revoked_at IS NULL',(int(time.time()),))
                 restored.execute('UPDATE users SET auth_version=auth_version+1')
                 restored.execute("UPDATE ask_run SET status='interrupted' WHERE status='running'")

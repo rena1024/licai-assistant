@@ -1,4 +1,6 @@
 import AccountGate from './components/AccountGate'
+import { applyHoldingQuote } from './helpers/holdingQuotes'
+import NotificationSettings from './components/NotificationSettings'
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { useWebSocket } from './hooks/useWebSocket'
 import { api } from './hooks/useApi'
@@ -147,31 +149,7 @@ function PrivateApp() {
       quotesRef.current = msg.data
       setMarketOpen(msg.market_open || false)
       setLastUpdate(new Date())
-      setHoldings(prev => prev.map(h => {
-        const q = msg.data[h.stock_code]
-        if (!q) return h
-        const currentPrice = q.price
-        const fxRate = q.fx_rate || h.fx_rate || 1
-        const originalCostValue = h.cost_price * h.shares
-        const originalMarketValue = currentPrice * h.shares
-        const pnl = (originalMarketValue - originalCostValue) * fxRate
-        const pnlPct = h.cost_price > 0 ? (currentPrice - h.cost_price) / h.cost_price * 100 : 0
-        return {
-          ...h,
-          current_price: currentPrice,
-          fx_rate: fxRate,
-          fx_time: q.fx_time || h.fx_time || '',
-          fx_source: q.fx_source || h.fx_source || '',
-          price_change_pct: q.change_pct,
-          today_valid: q.today_valid !== undefined ? q.today_valid : h.today_valid,
-          unrealized_pnl: Math.round(pnl * 100) / 100,
-          pnl_pct: Math.round(pnlPct * 100) / 100,
-          original_cost_value: Math.round(originalCostValue * 100) / 100,
-          original_market_value: Math.round(originalMarketValue * 100) / 100,
-          cost_value: Math.round(originalCostValue * fxRate * 100) / 100,
-          market_value: Math.round(originalMarketValue * fxRate * 100) / 100,
-        }
-      }))
+      setHoldings(prev => prev.map(h => applyHoldingQuote(h, msg.data[h.stock_code])))
     }
   }, [])
   useWebSocket(handleWsMessage)
@@ -291,6 +269,7 @@ function PrivateApp() {
       </div>
     ),
 
+    notifications: () => (<div className={`${PAD} max-w-[900px]`}><NotificationSettings /></div>),
     settings: () => (
       <div className={`${PAD} max-w-[900px]`}>
         <Settings onClose={() => setView('portfolio')} />
@@ -305,6 +284,7 @@ function PrivateApp() {
         lastUpdate={lastUpdate}
         onRefresh={loadPortfolio}
         onSettings={() => setView('settings')}
+        onNotifications={() => setView('notifications')}
       />
 
       <div className="flex flex-1 min-h-0">

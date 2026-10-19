@@ -3,7 +3,9 @@ import AdminUsers from './AdminUsers'
 import OperationsPanel from './OperationsPanel'
 import UsagePanel from './UsagePanel'
 import ModelSettings from './ModelSettings'
-import { api, fetchJSON } from '../hooks/useApi'
+import DataCenter, { SearchPreferences } from './DataCenter'
+import NotificationSettings from './NotificationSettings'
+import { fetchJSON } from '../hooks/useApi'
 import { AttributionSection } from './settings/AttributionSection'
 import { ProviderSection } from './settings/ProviderSection'
 import { OkxSpotSection } from './settings/OkxSpotSection'
@@ -14,9 +16,6 @@ import { ZsxqSection } from './settings/ZsxqSection'
 
 export default function Settings({ onClose }) {
   const [admin, setAdmin] = useState(false)
-  const [url, setUrl] = useState('')
-  const [status, setStatus] = useState({ text: '', ok: null })
-  const [saving, setSaving] = useState(false)
 
   // OKX credentials
   const [okxStatus, setOkxStatus] = useState(null)
@@ -33,10 +32,6 @@ export default function Settings({ onClose }) {
   useEffect(() => {
     let active = true
     fetchJSON('/api/auth/me').then(data => { if (active) setAdmin(data.account.role === 'admin') }).catch(() => {})
-    api.getFeishuConfig().then(d => {
-      setUrl(d.webhook_url || '')
-      if (d.enabled) setStatus({ text: '已启用', ok: true })
-    })
     loadOkxStatus()
     return () => { active = false }
   }, [])
@@ -78,27 +73,6 @@ export default function Settings({ onClose }) {
     } catch {}
   }
 
-  const handleSave = async () => {
-    setSaving(true)
-    try {
-      const res = await api.saveFeishuConfig(url)
-      setStatus({ text: res.enabled ? '已保存并启用' : '已保存', ok: res.enabled })
-    } catch {
-      setStatus({ text: '保存失败', ok: false })
-    }
-    setSaving(false)
-  }
-
-  const handleTest = async () => {
-    setStatus({ text: '发送中...', ok: null })
-    try {
-      const res = await api.testFeishu()
-      setStatus({ text: res.message, ok: res.success })
-    } catch {
-      setStatus({ text: '发送失败', ok: false })
-    }
-  }
-
   return (
     <section className="rounded-xl border border-accent/20 bg-surface-2/80 overflow-hidden"
       style={{ animation: 'fade-up 0.3s ease-out' }}>
@@ -111,37 +85,9 @@ export default function Settings({ onClose }) {
       </div>
       <div className="p-4 space-y-3">
         <UsagePanel admin={admin} />
-        <section aria-labelledby="push-settings-title" className="border-t border-border pt-4 space-y-3">
-          <h3 id="push-settings-title" className="text-sm font-semibold">推送设置</h3>
-          <div>
-            <label htmlFor="feishu-webhook-url" className="text-[12px] text-text-dim block mb-1">飞书 Webhook URL</label>
-            <p className="text-[11px] text-text-muted mb-2">
-              飞书群 → 设置 → 群机器人 → 添加机器人 → 自定义机器人 → 复制 Webhook 地址
-            </p>
-            <input
-              id="feishu-webhook-url"
-              className="w-full bg-bg border border-border rounded-lg px-3 py-2 text-[13px] text-text font-mono outline-none focus:border-accent transition-colors"
-              placeholder="https://open.feishu.cn/open-apis/bot/v2/hook/xxxx"
-              value={url} onChange={e => setUrl(e.target.value)}
-            />
-          </div>
-          <div className="flex items-center gap-3">
-            <button onClick={handleSave} disabled={saving}
-              className="px-4 py-1.5 rounded-md bg-accent text-bg font-medium text-[13px] hover:opacity-90 disabled:opacity-50 cursor-pointer">
-              {saving ? '保存中...' : '保存'}
-            </button>
-            <button onClick={handleTest}
-              className="px-4 py-1.5 rounded-md border border-border text-text-dim text-[13px] hover:text-text transition-colors cursor-pointer">
-              发送测试
-            </button>
-            {status.text && (
-              <span className={`text-[12px] font-medium
-                ${status.ok === true ? 'text-bull' : status.ok === false ? 'text-bear' : 'text-text-dim'}`}>
-                {status.text}
-              </span>
-            )}
-          </div>
-        </section>
+        <SearchPreferences />
+        {admin && <DataCenter />}
+        <NotificationSettings admin={admin} />
 
         {/* 本地代理 (OKX/外发统一) */}
         <div className="mt-2 pt-4 border-t border-border">

@@ -213,11 +213,8 @@ async def build_eod_summary() -> dict:
 
 
 async def push_eod_summary() -> dict:
-    from services import feishu_notify
+    from services.notifications import emit
     r = await build_eod_summary()
-    if feishu_notify.is_enabled():
-        await feishu_notify.send_text(r["text"])
-        r["pushed"] = True
-    else:
-        r["pushed"] = False
+    r['notification_id'] = await emit('summary',r['date'],title='收盘小结',body=r['text'])
+    r['pushed'] = False  # 应用内生成与外部渠道是否接受是两个独立状态。
     return r

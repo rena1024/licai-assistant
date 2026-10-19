@@ -1,13 +1,14 @@
-export default function Header({ marketOpen, lastUpdate, onRefresh, onSettings }) {
+import NotificationStatus from './NotificationStatus'
+export default function Header({ marketOpen, lastUpdate, onRefresh, onSettings, onNotifications }) {
   return (
     <header className="sticky top-0 z-50 border-b border-border bg-surface/80 backdrop-blur-xl">
       <div className="max-w-[1440px] mx-auto px-3 md:px-4 h-12 flex items-center justify-between">
-        <div className="flex items-center gap-2 md:gap-3">
+        <div className="flex items-center gap-2 md:gap-3 min-w-0">
           <h1 className="text-[15px] font-semibold tracking-tight text-accent">
             理财助手
           </h1>
           <span className={`
-            inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-medium tracking-wide
+            hidden sm:inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-medium tracking-wide
             ${marketOpen
               ? 'bg-bull/15 text-bull-bright border border-bull-border'
               : 'bg-surface-3 text-text-dim border border-border'}
@@ -23,6 +24,7 @@ export default function Header({ marketOpen, lastUpdate, onRefresh, onSettings }
               {lastUpdate.toLocaleTimeString('zh-CN')}
             </span>
           )}
+          <NotificationStatus onOpen={onNotifications} />
           <button onClick={onRefresh}
             className="px-3 py-1 rounded-md border border-border text-text-dim hover:text-text hover:border-text-muted transition-colors cursor-pointer">
             刷新

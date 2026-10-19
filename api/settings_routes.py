@@ -298,8 +298,7 @@ async def get_feishu_config():
 
 @router.post("/feishu")
 async def save_feishu_config(data: FeishuConfig):
-    feishu_notify.configure(data.webhook_url)
-    return {"message": "保存成功", "enabled": feishu_notify.is_enabled()}
+    raise HTTPException(410,'请在我的通知中管理飞书渠道，所有事件统一使用当前渠道')
 
 
 class FeishuMute(BaseModel):
@@ -308,17 +307,12 @@ class FeishuMute(BaseModel):
 
 @router.post("/feishu/mute")
 async def set_feishu_mute(data: FeishuMute):
-    """切换飞书推送静音 (用于前端"通知开/关"按钮联动后端)."""
-    feishu_notify.set_muted(data.muted)
-    return {"muted": data.muted, "enabled": feishu_notify.is_enabled()}
+    raise HTTPException(410,'请在我的通知中停用或启用统一外部渠道')
 
 
 @router.post("/feishu/test")
 async def test_feishu():
-    if not feishu_notify.is_enabled():
-        return {"success": False, "message": "请先配置飞书 Webhook URL"}
-    ok = await feishu_notify.send_test()
-    return {"success": ok, "message": "发送成功" if ok else "发送失败，请检查 Webhook URL"}
+    raise HTTPException(410,'请在我的通知中确认当前渠道并发送测试')
 
 
 # --- Risk Config ---
@@ -387,3 +381,22 @@ async def rules_mine():
     """立刻挖一次(平时是每周一早上自动跑)。每次最多起草 3 条, 要调模型。"""
     from services import rule_forge as rf
     return await rf.mine_new(max_drafts=3)
+
+
+@router.get('/data-center')
+async def data_center():
+    from services.data_sources import overview
+    return await overview()
+
+
+@router.put('/data-center')
+async def save_data_center(request: Request):
+    from services.data_sources import save_policy
+    try:
+        data=await request.json()
+        version=data.pop('expected_version')
+        if type(version) is not int or version<0:
+            raise ValueError()
+        return await save_policy(data,expected_version=version)
+    except (ValueError,KeyError,TypeError,AttributeError):
+        raise HTTPException(422,'来源配置无效或版本已变化，请刷新后重试') from None

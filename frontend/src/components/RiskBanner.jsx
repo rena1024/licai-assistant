@@ -1,6 +1,5 @@
 import { apiFetch } from '../hooks/sessionRuntime'
 import { useState, useEffect } from 'react'
-import { fetchJSON } from '../hooks/useApi'
 import { fmtMoney } from '../helpers'
 
 export default function RiskBanner({ holdings }) {
@@ -8,7 +7,6 @@ export default function RiskBanner({ holdings }) {
   const [dismissed, setDismissed] = useState(false)
 
   useEffect(() => {
-    fetchJSON('/api/settings/feishu').catch(() => {}) // warm up
     // Load risk config
     apiFetch('/api/settings/risk').then(r => r.json()).then(d => {
       if (d.max_daily_loss) setMaxDailyLoss(parseFloat(d.max_daily_loss))
@@ -16,6 +14,7 @@ export default function RiskBanner({ holdings }) {
   }, [])
 
   if (!holdings || holdings.length === 0 || dismissed) return null
+  if (holdings.some(h => h.shares > 0 && h.quote_quality && !['fresh', 'last_trade'].includes(h.quote_quality))) return null
 
   // Suppress risk banner outside A-share trading days (price_change_pct is stale).
   const dow = new Date().getDay()

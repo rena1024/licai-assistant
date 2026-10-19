@@ -29,6 +29,8 @@ from database import init_db, get_config, set_config
 from services import llm_client
 from services.js_runtime import initialize_js_runtime
 from api.operations_routes import router as operations_router
+from api.notification_routes import router as notification_router
+from api.search_routes import router as search_router
 from api.model_routes import router as model_router
 from api.usage_routes import router as usage_router
 from api.admin_routes import router as admin_router
@@ -99,6 +101,8 @@ async def lifespan(app: FastAPI):
         # 初始化前不启动旧版个人任务，也不恢复数据库中的外部配置。
         yield
         return
+    from services.notification_delivery import interrupt_pending as interrupt_notifications
+    await interrupt_notifications()
     # 上一个进程留下的"在跑"的 agent 轮次: 进程一没那些 task 就不存在了, 留着 running
     # 会让界面一直转。标成 interrupted, 过程留着(不自动重跑 —— 重跑要再烧一遍 token)。
     try:
@@ -163,6 +167,8 @@ async def lifespan(app: FastAPI):
         if _mp:
             os.environ["MARKET_PROVIDER"] = _mp
     from services.scheduler import personal_loop, public_loop
+    from services.notification_delivery import delivery_loop
+    notification_task = asyncio.create_task(delivery_loop())
     task1 = asyncio.create_task(price_monitor_loop())
     task2 = asyncio.create_task(backup_loop())
     task4 = asyncio.create_task(personal_loop())
@@ -173,6 +179,7 @@ async def lifespan(app: FastAPI):
     task10 = asyncio.create_task(_symbol_dict_prewarm())
     print(f"理财助手已启动: http://localhost:{config.port}")
     yield
+    notification_task.cancel()
     task1.cancel()
     task2.cancel()
     task4.cancel()
@@ -208,6 +215,8 @@ app.include_router(auth_router)
 app.include_router(admin_router)
 app.include_router(operations_router)
 app.include_router(model_router)
+app.include_router(search_router)
+app.include_router(notification_router)
 app.include_router(usage_router)
 app.include_router(portfolio_router)
 app.include_router(market_router)

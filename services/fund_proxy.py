@@ -53,11 +53,11 @@ def _fetch_hardcoded_one(p: dict) -> dict | None:
     elif t == "hk_index":
         q = _fetch_hk_index_quote(sym)
     elif t == "a_etf":
-        # A股 ETF 用同步 sina quotes (运行在 thread executor 里, 不能再嵌一层 event loop)
-        from services.market_data import _fetch_sina_quotes
-        r = _fetch_sina_quotes([sym])
-        qq = r.get(sym)
-        q = {"price": qq["price"], "change_pct": qq["change_pct"]} if qq else None
+        # 本函数在线程中运行；统一报价入口负责来源策略及故障降级。
+        from services.market_data import get_realtime_quotes
+        q=asyncio.run(get_realtime_quotes([sym])).get(sym)
+        if not q or q.get('quality') not in ('fresh','last_trade') or q.get('change_pct') is None:
+            return None
     else:
         return None
     if not q:
@@ -66,6 +66,7 @@ def _fetch_hardcoded_one(p: dict) -> dict | None:
         "code": sym, "name": p["name"], "weight": p["weight"],
         "price": q.get("price"), "change_pct": q.get("change_pct", 0),
         "source": "hardcoded",
+        **{key:q.get(key) for key in ("quality","source_id","source_at","fetched_at","stale_reason")},
     }
 
 
@@ -103,7 +104,7 @@ async def _holdings_proxy(fund_code: str) -> dict | None:
         *(fetch_holding_quote(h) for h in holdings),
         return_exceptions=True,
     )
-    valid = [q for q in quotes if q and not isinstance(q, Exception) and q.get("change_pct") is not None]
+    valid = [q for q in quotes if q and not isinstance(q, Exception) and q.get("change_pct") is not None and q.get("quality") in ("fresh","last_trade")]
     if not valid:
         return None
     total_w = sum(q["weight"] for q in valid)
@@ -119,6 +120,7 @@ async def _holdings_proxy(fund_code: str) -> dict | None:
             "code": v["code"], "name": v["name"], "market": v["market"],
             "weight": v["weight"], "change_pct": v["change_pct"],
             "source": "holdings",
+            **{key:v.get(key) for key in ("quality","source_id","source_at","fetched_at","stale_reason")},
         }
         for v in valid
     ]
@@ -130,6 +132,8 @@ async def _holdings_proxy(fund_code: str) -> dict | None:
         "proxies": proxies_out,
         "method": "holdings",
         "coverage_pct": round(total_w * 100, 1),
+        "missing_constituents":len(holdings)-len(valid),
+        "data_limitations":"仅覆盖可取得可信报价的已披露成分股，并非整只基金的完整当日收益",
     }
 
 

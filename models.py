@@ -28,6 +28,12 @@ class HoldingResponse(BaseModel):
     currency: str = "CNY"
     shares: float
     cost_price: float
+    quote_quality: str = "unknown"
+    source_id: Optional[str] = None
+    source_at: Optional[str] = None
+    fetched_at: Optional[str] = None
+    stale_reason: Optional[str] = None
+    market_state: Optional[str] = None
     current_price: Optional[float] = None
     fx_rate: float = 1.0
     fx_time: Optional[str] = None

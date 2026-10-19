@@ -452,23 +452,15 @@ async def market_news():
     if cached and time.time() - cached[1] < _TTL:
         return cached[0]
     _strip_proxy_env()
-    # 四源并发拉取, 任一源超时/失败只丢自己, 不阻塞其余
-    results = await asyncio.gather(
-        _fetch_source(_fetch_global_em),
-        _fetch_source(_fetch_global_cls),
-        _fetch_source(_fetch_global_ths),
-        _fetch_source(_fetch_global_jin10),
-    )
-    # 合并去重 (按 title; 顺序 em→cls→ths→金十 决定保留优先级), 时间倒序
-    out, seen = [], set()
-    for lst in results:
-        for it in lst:
-            title = it.get("title")
-            if not title or title in seen:
-                continue
-            seen.add(title)
-            out.append(it)
-    out.sort(key=lambda x: x.get("time") or "", reverse=True)
+    from services import data_sources
+    from services.news import aggregate_items
+    policy=await data_sources.policy()
+    functions={'em':_fetch_global_em,'cls':_fetch_global_cls,'ths':_fetch_global_ths,'jin10':_fetch_global_jin10}
+    providers=policy['news']
+    results=await asyncio.gather(*(_fetch_source(functions[p]) for p in providers))
+    for provider,items in zip(providers,results):
+        await data_sources.record('news',provider,'global',bool(items),source_at=max((it.get('time') or '' for it in items),default='') or None)
+    out=aggregate_items(zip(providers,results))
     result = {"items": out, "count": len(out)}
     # 三源全空(全超时)不写缓存, 避免把空结果钉死 5 分钟; 有数据才缓存
     if out:

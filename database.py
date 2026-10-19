@@ -609,6 +609,15 @@ async def init_db():
         await db.executescript(MODEL_SCHEMA)
         from services.budget import SCHEMA as BUDGET_SCHEMA
         await db.executescript(BUDGET_SCHEMA)
+        c_version=await (await db.execute("SELECT value FROM runtime_metadata WHERE key='data_notifications_schema_version'")).fetchone() if metadata else None
+        if c_version and c_version[0]!='1':
+            raise RuntimePathError('数据与通知数据库版本不兼容，停止初始化')
+        from services.data_sources import SCHEMA as SOURCE_SCHEMA
+        await db.executescript(SOURCE_SCHEMA)
+        from services.notifications import SCHEMA as NOTIFICATION_SCHEMA
+        await db.executescript(NOTIFICATION_SCHEMA)
+        from services.search import SCHEMA as SEARCH_SCHEMA
+        await db.executescript(SEARCH_SCHEMA)
         from services.local_queue import SCHEMA as QUEUE_SCHEMA
         await db.executescript(QUEUE_SCHEMA)
         await db.execute('CREATE TABLE IF NOT EXISTS runtime_metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL)')
@@ -616,6 +625,7 @@ async def init_db():
         if llm_version and llm_version[0] != '1':
             raise RuntimePathError('模型数据库版本不兼容，停止初始化')
         await db.execute("INSERT OR IGNORE INTO runtime_metadata VALUES ('llm_schema_version','1')")
+        await db.execute("INSERT OR IGNORE INTO runtime_metadata VALUES ('data_notifications_schema_version','1')")
         await db.execute('CREATE TABLE IF NOT EXISTS runtime_metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL)')
         await db.execute("INSERT OR IGNORE INTO runtime_metadata VALUES ('layout_version', ?)", (LAYOUT_VERSION,))
         await db.execute("INSERT OR IGNORE INTO runtime_metadata VALUES ('account_schema_version', ?)", (ACCOUNT_SCHEMA_VERSION,))

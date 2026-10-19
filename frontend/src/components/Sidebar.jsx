@@ -1,4 +1,5 @@
 const ICONS = {
+  notifications: <><path d="M6 8a6 6 0 0112 0v7l2 3H4l2-3zM10 21h4" /></>,
   portfolio: <><rect x="4" y="8" width="16" height="11" rx="2" /><path d="M9 8V6a2 2 0 012-2h2a2 2 0 012 2v2M4 13h16" /></>,
   sector: <><rect x="4" y="4" width="7" height="7" rx="1" /><rect x="13" y="4" width="7" height="7" rx="1" /><rect x="4" y="13" width="7" height="7" rx="1" /><rect x="13" y="13" width="7" height="7" rx="1" /></>,
   rankings: <><path d="M8 4h8v4a4 4 0 01-8 0z" /><path d="M8 5H5v1a3 3 0 003 3M16 5h3v1a3 3 0 01-3 3M10 15h4M9 19.5h6M12 15v4.5" /></>,
@@ -30,6 +31,7 @@ export const NAV = [
     { key: 'performance', label: '绩效·基准' },
     { key: 'allocation',  label: '配置建议' },
     { key: 'review',      label: '复盘' },
+    { key: 'notifications', label: '我的通知' },
   ] },
   { group: '市场', items: [
     { key: 'open',     label: '开盘·情绪' },

@@ -7,12 +7,17 @@ from services import runtime_state,backup,audit,logging_config
 async def maintenance_once(*,startup=False,now=None):
     now=int(time.time() if now is None else now)
     with runtime_state.runtime_scope():
+        previous=runtime_state.read_state()
+        from services.notifications import system_event,cleanup
         try:
             result=await asyncio.to_thread(backup.backup_if_due,now=now,startup=startup)
         except backup.BackupError:
             await audit.management_event('backup_failed')
+            await system_event('backup_failed',f"backup:{previous.get('backup_success_at',0)}")
             logging_config.record_event(event='backup_failed',outcome='failure',elapsed_ms=0)
             return False
+        if result and previous.get('backup_error'):
+            await system_event('backup_recovered',f"backup:{previous.get('backup_error_at',0)}")
         if result:
             await audit.management_event('backup_created')
             logging_config.record_event(event='backup_created',outcome='success',elapsed_ms=0)
@@ -25,6 +30,7 @@ async def maintenance_once(*,startup=False,now=None):
             await db.execute('DELETE FROM audit_events WHERE created_at<?',(now-days*86400,))
             await db.commit()
         finally:await db.close()
+        await cleanup(now=now)
         logging_config.cleanup_logs(now=now)
         return True
 

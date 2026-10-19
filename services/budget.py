@@ -168,6 +168,12 @@ async def _alerts(db, subject, kind, period):
         for threshold in (warning,100):
             if row['used']*100 >= row['cap']*threshold:
                 await db.execute('INSERT OR IGNORE INTO llm_budget_alerts VALUES (?,?,?,?)', (subject,kind,period,threshold))
+                from services.notifications import insert_event,insert_system
+                key=f'{kind}:{period}:{threshold}'
+                if subject==0:
+                    await insert_system(db,'global_budget',key)
+                else:
+                    await insert_event(db,subject,'personal_budget',key,'个人预算提醒',f'本人{kind}预算达到 {threshold}% 阈值，请在用量页面查看。')
 
 
 async def settle_attempt(reservation_id, usage_or_unknown, provider_request_id='', *, audit_reason=None):

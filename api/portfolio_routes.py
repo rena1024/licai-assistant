@@ -226,6 +226,8 @@ async def list_holdings() -> list[HoldingResponse]:
             shares=h["shares"],
             cost_price=h["cost_price"],
             current_price=current_price,
+            quote_quality=(q or {}).get("quality", "unknown"),
+            **{key:(q or {}).get(key) for key in ("source_id", "source_at", "fetched_at", "stale_reason", "market_state")},
             fx_rate=fx_rate,
             fx_time=fx_info.get("time") or "",
             fx_source=fx_info.get("source") or "",
@@ -1495,10 +1497,9 @@ async def sector_concentration():
     for h in holdings:
         code = h["stock_code"]
         q = quotes.get(code)
-        if not q or q["price"] <= 0:
-            price = h["cost_price"]
-        else:
-            price = q["price"]
+        if not q or not q.get("price"):
+            continue
+        price = q["price"]
         mv = price * h["shares"]
         total_value += mv
         sec = sector_map[code]
@@ -1530,10 +1531,13 @@ async def sector_concentration():
         level = "ok"
         message = ""
 
+    if any(not (quotes.get(h["stock_code"]) or {}).get("price") or (quotes.get(h["stock_code"]) or {}).get("quality") in ("stale","unknown","delayed") for h in holdings):
+        level, message = "unknown", "行情覆盖不完整或含旧价，当前无法给出完整集中度判断"
     return {
         "total_value": round(total_value, 2),
         "sectors": sector_list,
         "max_concentration": round(max_pct, 4),
+        "coverage": {"held":len(holdings),"covered":sum(bool((quotes.get(h["stock_code"]) or {}).get("price")) for h in holdings)},
         "level": level,
         "message": message,
     }

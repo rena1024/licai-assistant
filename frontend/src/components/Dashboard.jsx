@@ -1,3 +1,4 @@
+import DataQuality from './DataQuality'
 import { useState, useEffect } from 'react'
 import { fetchJSON, MUTATED_EVENT } from '../hooks/useApi'
 import { fmtMoney, priceColor, isOnchainEtf } from '../helpers'
@@ -183,6 +184,7 @@ export default function Dashboard({ holdings }) {
     <div className="flex items-center gap-4 px-4 py-2 border-b border-border-subtle bg-surface/40 overflow-x-auto overflow-y-hidden"
       style={{ animation: 'fade-up 0.25s ease-out' }}>
 
+      <DataQuality holdings={holdings} />
       {/* Total (combined stock + external) */}
       <div className="flex items-center gap-1.5 shrink-0">
         <Tooltip content={

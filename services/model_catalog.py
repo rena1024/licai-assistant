@@ -211,6 +211,8 @@ async def save_preferences(*, local_only, scenes, expected_version=None, automat
         if automatic_ai_enabled is not None:
             if type(automatic_ai_enabled) is not bool:raise ValueError('自动任务开关无效')
             await db.execute("INSERT INTO user_settings VALUES (?,'automatic_ai_enabled',?) ON CONFLICT(user_id,key) DO UPDATE SET value=excluded.value",(require_user_id(),'1' if automatic_ai_enabled else '0'))
+        from services.notifications import insert_event
+        await insert_event(db,require_user_id(),'model_switch',f'preferences:{version+1}','模型偏好已更新','本人模型场景偏好已保存，后续调用按当前选择执行。')
         await db.commit()
         return {'version': version+1, 'local_only': local_only, 'scenes': scenes, 'automatic_ai_enabled':automatic_ai_enabled}
     finally:

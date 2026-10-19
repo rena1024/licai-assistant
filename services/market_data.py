@@ -423,6 +423,7 @@ def _fetch_sina_quotes(stock_codes: list[str]) -> dict:
                 "amount": amount,
                 "change_pct": change_pct,
                 "amplitude": amplitude,
+                "quote_time": f"{fields[30]} {fields[31]}",
                 "turnover_rate": 0,  # Sina doesn't provide this directly
             }
         except (ValueError, IndexError):
@@ -442,49 +443,10 @@ async def get_realtime_quotes(stock_codes: list[str]) -> dict:
     if cached is not None:
         return cached
 
-    try:
-        a_codes = [c for c in codes if split_stock_code(c)[0] == "A"]
-        hk_codes = [c for c in codes if split_stock_code(c)[0] == "HK"]
-        us_codes = [c for c in codes if split_stock_code(c)[0] == "US"]
-
-        result = {}
-        if a_codes:
-            result.update(await asyncio.to_thread(_fetch_sina_quotes, a_codes))
-
-        async def fetch_one(code: str):
-            market, symbol = split_stock_code(code)
-            if market == "HK":
-                q = await asyncio.to_thread(_fetch_hk_stock_quote, symbol)
-            elif market == "US":
-                q = await asyncio.to_thread(_fetch_us_stock_quote, symbol)
-            else:
-                q = None
-            if not q:
-                return None
-            fx = get_fx_info(q.get("currency", "CNY"))
-            return code, {
-                "stock_code": code,
-                "fx_rate": fx["rate"],
-                "fx_time": fx.get("time", ""),
-                "fx_source": fx.get("source", ""),
-                **q,
-            }
-
-        overseas = await asyncio.gather(
-            *(fetch_one(c) for c in [*hk_codes, *us_codes]),
-            return_exceptions=True,
-        )
-        for item in overseas:
-            if isinstance(item, Exception) or not item:
-                continue
-            code, quote = item
-            result[code] = quote
-        if result:
-            _cache_set(cache_key, result)
-        return result
-    except Exception as e:
-        print(f"[market_data] Error fetching Sina quotes: {e}")
-        return {}
+    from services.quote_sources import quotes
+    result = await quotes(codes)
+    _cache_set(cache_key, result)
+    return result
 
 
 async def get_stock_name(stock_code: str) -> str:
@@ -840,6 +802,8 @@ async def _append_live_bar_if_missing(stock_code: str, df: pd.DataFrame) -> pd.D
     if str(df["日期"].iloc[-1])[:10] >= today:
         return df
     q = (await get_realtime_quotes([stock_code])).get(normalize_stock_code(stock_code)) or {}
+    if q.get("quality") in ("stale","missing","unknown","delayed") or (q.get("source_at") and str(q["source_at"])[:10]!=today):
+        return df
     o, h, l, c = q.get("open"), q.get("high"), q.get("low"), q.get("price")
     if not (o and h and l and c):
         return df
@@ -853,134 +817,56 @@ async def _append_live_bar_if_missing(stock_code: str, df: pd.DataFrame) -> pd.D
 
 
 async def _get_historical_data_inner(stock_code: str, days: int = 60) -> pd.DataFrame:
-    """Get historical daily OHLCV data.
-    Layer 1: In-memory cache (5 min TTL)
-    Layer 2: SQLite persistent cache (check if up-to-date)
-    Layer 3: Sina Finance API → save to SQLite
-    Layer 4: AKShare fallback
-    """
-    from database import get_cached_klines, get_cached_latest_date, save_klines
+    """按独立日 K 策略取前复权数据；不以不复权源补齐同一序列。"""
+    from database import get_db, get_cached_klines
+    from services import data_sources
     stock_code = normalize_stock_code(stock_code)
     if split_stock_code(stock_code)[0] in ("HK", "US"):
         return await _get_history_foreign(stock_code, days)
     if not is_a_share(stock_code):
         return pd.DataFrame()
-
     cache_key = f"hist_{stock_code}_{days}"
-    df = _cache_get(cache_key, config.history_cache_ttl)
-    if df is not None:
-        return df
-
-    # 主源: 东财前复权 (fqt=1) — 历史连续, 除权/份额折算不断崖 (Sina/SQLite 是不复权, ETF
-    # 拆分日会断崖). 成功即返回, 绕开可能被不复权数据污染的 SQLite 缓存. 失败再走下面兜底.
-    try:
-        df = await asyncio.to_thread(_fetch_history_em, stock_code, max(days, 250))
-        if df is not None and not df.empty:
-            # 前复权结果写回 SQLite(INSERT OR REPLACE)→ 覆盖历史不复权污染行, 缓存自愈;
-            # 即便下次 EM 抽风失败, 兜底也是连续的前复权数据. 除权再发生时下次成功抓取会重新覆盖.
-            await _save_klines_complete(stock_code, df.to_dict("records"))
-            df = df.tail(days)
-            _cache_set(cache_key, df)
-            return df
-    except Exception as e:
-        print(f"[market_data] EM qfq history failed for {stock_code}: {e}")
-
-    is_etf = _is_etf_lof(stock_code)
-
-    # Check if SQLite cache is fresh enough (has today or yesterday's data)
-    today = datetime.now().strftime("%Y-%m-%d")
-    latest = await get_cached_latest_date(stock_code)
-    need_fetch = not latest or latest < today
-
-    # 场内 ETF 跳过即时服务 SQLite 缓存: 历史上可能被新浪不复权数据污染过(断崖),
-    # 宁可继续往下走前复权源(akshare qfq), 也不服务可能脏的缓存。
-    if not need_fetch and not is_etf:
-        # SQLite cache is up-to-date, use it —— 但必须够深: 缓存只攒了 260 根时,
-        # days=750 的续史请求不能被它截胡, 放行到下游源拉长再回写自愈
-        rows = await get_cached_klines(stock_code, days)
-        if rows and len(rows) < days:
-            rows = None
-        if rows:
-            df = pd.DataFrame(rows)
-            df.rename(columns={"date": "日期", "open": "开盘", "high": "最高", "low": "最低", "close": "收盘", "volume": "成交量", "amount": "成交额"}, inplace=True)
-            if "成交额" not in df.columns: df["成交额"] = 0   # 缓存里读回来的额别清零
-            df["振幅"] = 0
-            df["涨跌幅"] = 0
-            df["涨跌额"] = 0
-            df["换手率"] = 0
-            _cache_set(cache_key, df)
-            return df
-
-    # Fallback to AKShare
-    end_date = datetime.now().strftime("%Y%m%d")
-    start_date = (datetime.now() - timedelta(days=days * 2)).strftime("%Y%m%d")
-    # ETF/LOF 专用源: stock_zh_a_hist 是个股接口不覆盖基金, 个别 ETF(如512480)东财 kline 主源
-    # 偶发返回空时, 个股接口也兜不住 → 用 fund_etf_hist_em(前复权)专门兜 ETF。列名与个股一致。
-    if is_etf:
+    cached = _cache_get(cache_key, config.history_cache_ttl)
+    if cached is not None:
+        return cached
+    policy = await data_sources.policy()
+    for source in policy['kline']:
         try:
-            df = await asyncio.to_thread(
-                ak.fund_etf_hist_em, symbol=stock_code, period="daily",
-                start_date=start_date, end_date=end_date, adjust="qfq",
-            )
-            if df is not None and not df.empty:
-                await _save_klines_complete(stock_code, df.to_dict("records"))   # 前复权回写自愈缓存
-                df = df.tail(days)
-                _cache_set(cache_key, df)
-                return df
+            fn = _fetch_history_em if source == 'eastmoney' else _kline_tencent_a
+            df = await asyncio.to_thread(fn, stock_code, max(days, 250))
         except Exception:
-            pass
-    try:
-        df = await asyncio.to_thread(
-            ak.stock_zh_a_hist, symbol=stock_code, period="daily",
-            start_date=start_date, end_date=end_date, adjust="qfq",
-        )
-        if df is not None and not df.empty:
-            # akshare 也是前复权 → ETF 回写自愈缓存(覆盖历史不复权污染行), 即便 EM 抽风也连续
-            if is_etf:
-                await _save_klines_complete(stock_code, df.to_dict("records"))
-            df = df.tail(days)
-            _cache_set(cache_key, df)
-            return df
-    except Exception:
-        pass
-
-    # 腾讯前复权兜底(不同提供商, 抗东财 push2his 抽风; ETF/个股通用, 也是连续前复权)。
-    try:
-        df = await asyncio.to_thread(_kline_tencent_a, stock_code, max(days, 120))
-        if df is not None and not df.empty:
-            await _save_klines_complete(stock_code, df.to_dict("records"))   # 前复权回写自愈缓存
-            df = df.tail(days)
-            _cache_set(cache_key, df)
-            return df
-    except Exception as e:
-        print(f"[market_data] Tencent A history failed for {stock_code}: {e}")
-
-    # 最后的实时兜底: Sina 不复权(非ETF)。排在所有前复权源之后——不复权在除权/送转日会露断崖,
-    # 只有 EM/akshare/腾讯前复权全失败时才用它, 且只服务本次不写回 SQLite(避免把断崖污染进缓存)。
-    if not is_etf:
+            df = pd.DataFrame()
+        success = df is not None and not df.empty
+        await data_sources.record('kline',source,'A',success,
+            source_at=str(df.iloc[-1]['日期']) if success else None)
+        if not success:
+            continue
+        await _save_klines_complete(stock_code, df.to_dict('records'))
+        db = await get_db()
         try:
-            df = await asyncio.to_thread(_fetch_history_sina, stock_code, max(days, 120))
-            if df is not None and not df.empty:
-                df = df.tail(days)
-                _cache_set(cache_key, df)
-                return df
-        except Exception as e:
-            print(f"[market_data] Sina history failed for {stock_code}: {e}")
-
-    # Last resort: use SQLite cache even if stale
-    rows = await get_cached_klines(stock_code, days)
-    if rows:
-        df = pd.DataFrame(rows)
-        df.rename(columns={"date": "日期", "open": "开盘", "high": "最高", "low": "最低", "close": "收盘", "volume": "成交量", "amount": "成交额"}, inplace=True)
-        if "成交额" not in df.columns: df["成交额"] = 0   # 缓存里读回来的额别清零
-        df["振幅"] = 0
-        df["涨跌幅"] = 0
-        df["涨跌额"] = 0
-        df["换手率"] = 0
+            await db.execute('INSERT INTO kline_provenance VALUES (?,?,?) ON CONFLICT(stock_code) DO UPDATE SET adjustment=excluded.adjustment,provider=excluded.provider', (stock_code,'qfq',source))
+            await db.commit()
+        finally:
+            await db.close()
+        df = df.tail(days)
+        df.attrs.update(source_id=source,adjustment='qfq',quality='source',fetched_at=datetime.now(timezone.utc).isoformat())
         _cache_set(cache_key, df)
         return df
-
-    return pd.DataFrame()
+    # 旧缓存未记复权依据时不可宣称为前复权，不把原始价和复权价混合。
+    db = await get_db()
+    try:
+        known = await (await db.execute("SELECT provider FROM kline_provenance WHERE stock_code=? AND adjustment='qfq'",(stock_code,))).fetchone()
+    finally:
+        await db.close()
+    rows = await get_cached_klines(stock_code, days) if known else []
+    if not rows:
+        return pd.DataFrame()
+    df = pd.DataFrame(rows).rename(columns={"date":"日期","open":"开盘","high":"最高","low":"最低","close":"收盘","volume":"成交量","amount":"成交额"})
+    for column in ('成交额','振幅','涨跌幅','涨跌额','换手率'):
+        if column not in df.columns:
+            df[column] = 0
+    df.attrs.update(source_id=known[0],adjustment='qfq',quality='stale',stale_reason='sources_unavailable')
+    return df
 
 
 async def get_intraday_data(stock_code: str) -> pd.DataFrame:
