@@ -109,7 +109,7 @@ export default function UsagePanel({ admin }) {
         <label className="block">调用明细保留天数<input name="days" type="number" required min="1" max="365" defaultValue={policy.detail_days} className="ml-2 border border-border bg-bg p-1" /></label>
         <label className="block">预算预警百分比<input name="threshold" type="number" required min="1" max="99" defaultValue={policy.warning_threshold} className="ml-2 border border-border bg-bg p-1" /></label>
         <label className="block">全局本地推理并发<input name="concurrency" type="number" required min="1" max="8" defaultValue={policy.local_concurrency} className="ml-2 border border-border bg-bg p-1" /></label>
-        <button disabled={busy} className="text-accent">保存用量策略</button>
+        <button disabled={busy} className="rounded bg-accent px-3 py-2 text-bg">保存用量策略</button>
       </form>}
     </>}
     {notice && <p role="status">{notice}</p>}
