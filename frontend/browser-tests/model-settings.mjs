@@ -123,12 +123,17 @@ try {
     try { await page.getByRole('status').filter({ hasText: '模型 local-test 已保存' }).waitFor({ timeout: 5000 }) }
     catch { throw new Error(`保存未成功：${(await page.getByRole('alert').allTextContents()).join('; ')}`) }
     await page.getByRole('button', { name: '编辑 local-test', exact: true }).waitFor()
+    const localCard = page.getByRole('button', { name: '编辑 local-test', exact: true }).locator('..')
+    page.once('dialog', dialog => dialog.accept())
+    await localCard.getByRole('button', { name: '测试文本', exact: true }).click()
+    await localCard.getByRole('status').filter({ hasText: '文本测试通过' }).waitFor({ timeout: 3000 })
     assert.equal(await page.getByLabel('问答主模型').locator('option[value="local-test"]').count(), 1)
     assert.equal(await page.getByLabel('问答主模型').inputValue(), '')
     const catalog = await (await page.request.get('http://127.0.0.1:18768/api/models')).json()
     assert.equal(catalog.models[0].model, 'qwen3:4b')
     await page.reload()
     await page.getByRole('button', { name: '编辑 local-test', exact: true }).waitFor()
+    await localCard.getByRole('status').filter({ hasText: '文本测试通过' }).waitFor({ timeout: 3000 })
     assert.equal(await page.getByLabel('问答主模型').locator('option[value="local-test"]').count(), 1)
     await page.getByRole('button', { name: '编辑 local-test', exact: true }).click()
     assert.equal(await endpoint.inputValue(), 'http://127.0.0.1:11434', '编辑时应保留保存的自定义地址')

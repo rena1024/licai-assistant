@@ -20,5 +20,15 @@ with tempfile.TemporaryDirectory(prefix='licai-model-browser-') as directory:
                                        password='Synthetic-model-test-01!')
 
     asyncio.run(prepare())
+    from services import llm_runtime
+
+    def synthetic_inference(model, payload, path, headers):
+        # 浏览器用例只验证测试结果的展示与持久化，不访问真实 Ollama 或云端。
+        if not model.local:
+            raise AssertionError('浏览器回归禁止真实云端推理')
+        return {'message': {'role': 'assistant', 'content': 'OK'}, 'done': True,
+                'prompt_eval_count': 1, 'eval_count': 1}
+
+    llm_runtime.send_http = synthetic_inference
     import uvicorn
     uvicorn.run('run:app', host='127.0.0.1', port=18768, log_level='warning')

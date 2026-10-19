@@ -84,15 +84,21 @@ function ModelServices({ models, reload, execute, busy }) {
     <p className="text-xs text-text-dim">管理员开放服务，用户自行选择模型。单价按原币 / 百万 Token 填写；价格、汇率或凭证缺失不能开放云端服务。协议能力须实际测试确认。</p>
     <p className="text-xs text-text-dim">停用后可再次启用；删除需先停用，只移除本应用服务配置，历史用量保留。</p>
     {models.map(m => <div key={m.id} className="rounded border border-border p-2 text-sm">
-      <p>{m.id} · {m.model} · v{m.version} · {m.local ? '本地' : '云端'} · {m.enabled ? '已开放' : '已停用'}</p>
+      <p>{m.id} · {m.model} · v{m.version} · {m.local ? '本地' : '云端'} · {m.enabled ? '已开放' : '已停用'}
+        {m.checks?.map(check => <span key={check.capability} role="status" className={`ml-3 ${check.success ? 'text-bull' : 'text-bear'}`}>
+          {capabilities[check.capability]}测试{check.success ? '通过' : '未通过'}
+        </span>)}
+      </p>
       <p>{m.capabilities.map(c => capabilities[c]).join(' / ')} · {m.validation_status || '尚未真实联调'}</p>
       <button type="button" disabled={busy} onClick={() => { setEditing(m); setProtocol(m.protocol); setEndpoint(m.endpoint) }} className="mr-3 text-accent">编辑 {m.id}</button>
       <button type="button" disabled={busy || saving} aria-label={`${m.enabled ? '停用' : '启用'} ${m.id}`} onClick={() => manageModel(m)} className="mr-3 text-accent disabled:opacity-50">{m.enabled ? '停用' : '启用'}</button>
       <button type="button" disabled={busy || saving || m.enabled} aria-label={`删除 ${m.id}`} title={m.enabled ? '请先停用，再删除' : '删除模型服务配置'} onClick={() => manageModel(m, true)} className="mr-3 text-bear disabled:opacity-50">删除</button>
       {m.capabilities.map(capability => <button key={capability} type="button" disabled={busy} onClick={async () => {
         if (!confirm(`将对 ${m.id} 发送测试请求，云端测试可能产生费用并占用全局预算。继续？`)) return
-        const response = await execute(`/api/models/${encodeURIComponent(m.id)}/test`, 'POST', { capability })
-        if (response) { setResult(`${m.id} ${capabilities[capability]}测试通过`); await reload() }
+        await execute(`/api/models/${encodeURIComponent(m.id)}/test`, 'POST', { capability })
+        // 成功与失败都重新读取当前配置版本的检查记录，避免旧成功提示残留。
+        try { await reload() }
+        catch { setValidationError('测试结果刷新失败，请刷新页面查看。') }
       }} className="mr-3 text-accent">测试{capabilities[capability]}</button>)}
     </div>)}
     <form key={editing ? `${editing.id}-${editing.version}` : 'new'} onSubmit={submit} onInvalid={event => {
