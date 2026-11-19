@@ -1,7 +1,10 @@
 import React from 'react'
 import { fmtMoney } from '../../helpers'
 import { fetchJSON } from '../../hooks/useApi'
-import { calculateConfirmation } from './confirmation'
+import { calculateConfirmation, deductRedemptionFee, displayedActionUnitPrice, editableActionUnitPrice } from './confirmation'
+import CashDividendForm from './forms/CashDividendForm'
+
+const ACTION_GRID_COLUMNS = 'grid-cols-[80px_60px_repeat(3,minmax(0,1fr))_160px]'
 
 // AssetActionsModal — 流水查看 + pending 确认.
 export function AssetActionsModal({ asset, onClose, onChanged }) {
@@ -10,14 +13,18 @@ export function AssetActionsModal({ asset, onClose, onChanged }) {
   const [loading, setLoading] = React.useState(true)
   const [confirmTarget, setConfirmTarget] = React.useState(null)
   const [editTarget, setEditTarget] = React.useState(null)
+  const [addingDividend, setAddingDividend] = React.useState(false)
+  const [dividendMessage, setDividendMessage] = React.useState('')
+  const [loadError, setLoadError] = React.useState('')
 
   const reload = React.useCallback(async () => {
     setLoading(true)
+    setLoadError('')
     try {
       const d = await fetchJSON(`/api/assets/${asset.id}/actions`)
       setActions(d.actions || [])
       setState(d.state || null)
-    } catch (e) { console.error(e) }
+    } catch (e) { setLoadError(`流水加载失败：${e.message}`) }
     finally { setLoading(false) }
   }, [asset.id])
 
@@ -67,10 +74,31 @@ export function AssetActionsModal({ asset, onClose, onChanged }) {
     <div className="fixed inset-0 z-[200] flex items-center justify-center bg-black/60 backdrop-blur-sm" onClick={onClose}>
       <div className="bg-surface-2 border border-border rounded-xl p-5 w-[640px] max-w-[95vw] max-h-[85vh] overflow-y-auto"
         onClick={e => e.stopPropagation()}>
-        <div className="flex items-baseline justify-between mb-3">
-          <h3 className="text-[14px] font-semibold text-text-bright m-0">流水 · {asset.name}</h3>
-          <button onClick={onClose} className="text-text-dim hover:text-text text-[18px] leading-none px-2 cursor-pointer">×</button>
+        <div className="flex items-baseline justify-between gap-2 mb-3">
+          <h3 title={asset.name} className="text-[14px] font-semibold text-text-bright m-0 min-w-0 truncate">流水 · {asset.name}</h3>
+          <div className="flex items-center gap-2 shrink-0">
+            {asset.asset_type === 'FUND' && !addingDividend && (
+              <button onClick={() => { setAddingDividend(true); setDividendMessage('') }}
+                className="px-2 py-1 rounded text-[11px] border border-accent/60 text-accent hover:bg-accent/10 cursor-pointer">
+                补录现金分红
+              </button>
+            )}
+            <button onClick={onClose} aria-label="关闭流水" className="text-text-dim hover:text-text text-[18px] leading-none px-2 cursor-pointer">×</button>
+          </div>
         </div>
+
+        {addingDividend && (
+          <CashDividendForm assetId={asset.id}
+            onCancel={() => setAddingDividend(false)}
+            onSaved={keepOpen => {
+              setAddingDividend(keepOpen)
+              setDividendMessage('现金分红已录入')
+              reload()
+              onChanged?.()
+            }} />
+        )}
+        {dividendMessage && <div role="status" className="text-info text-[11.5px] mb-3">{dividendMessage}</div>}
+        {loadError && <div role="alert" className="text-bear-bright text-[11.5px] mb-3">{loadError}</div>}
 
         {state && (
           <div className="grid grid-cols-3 gap-2 mb-3 text-[11.5px]">
@@ -117,10 +145,11 @@ export function AssetActionsModal({ asset, onClose, onChanged }) {
               })
               .map(a => {
               const isPending = (a.status || 'confirmed') === 'pending'
+              const displayUnitPrice = displayedActionUnitPrice(a)
               return (
-                <div key={a.id} className={`grid grid-cols-[80px_60px_1fr_1fr_1fr_auto] gap-2 px-2 py-2 text-[11.5px] items-center border-b border-border-subtle last:border-b-0 ${isPending ? 'bg-warn/5' : ''}`}>
-                  <div className="font-mono text-[10.5px] text-text-dim">
-                    {(a.trade_date || (a.created_at || '').slice(0, 10) || '').slice(5) || '--'}
+                <div key={a.id} className={`grid ${ACTION_GRID_COLUMNS} gap-2 px-2 py-2 text-[11.5px] items-center border-b border-border-subtle last:border-b-0 ${isPending ? 'bg-warn/5' : ''}`}>
+                  <div className="font-mono text-[10.5px] text-text-dim whitespace-nowrap">
+                    {(a.trade_date || a.created_at || '').slice(0, 10) || '--'}
                   </div>
                   <div className={`font-medium ${colorByType[a.action_type] || 'text-text'}`}>
                     {labelByType[a.action_type] || a.action_type}
@@ -131,10 +160,11 @@ export function AssetActionsModal({ asset, onClose, onChanged }) {
                   <div className="text-right font-mono text-[11px]">
                     {a.shares != null ? parseFloat(a.shares).toFixed(4) : '--'}
                   </div>
-                  <div className="text-right font-mono text-[11px]">
-                    {a.unit_price != null ? parseFloat(a.unit_price).toFixed(4) : '--'}
+                  <div className="text-right font-mono text-[11px]"
+                    title={a.action_type === 'REDEEM' || a.action_type === 'SELL' ? '扣费后净值 = 实际到账金额 ÷ 赎回份额' : '成交净值 / 单价'}>
+                    {displayUnitPrice != null ? displayUnitPrice.toFixed(4) : '--'}
                   </div>
-                  <div className="flex gap-1 items-center justify-end w-[160px]">
+                  <div className="flex gap-1 items-center justify-end">
                     {isPending ? (
                       <>
                         <button onClick={() => editPendingAmount(a)}
@@ -168,6 +198,9 @@ export function AssetActionsModal({ asset, onClose, onChanged }) {
               )
             })}
           </div>
+        )}
+        {actions.some(a => a.action_type === 'REDEEM' || a.action_type === 'SELL') && (
+          <div className="mt-2 text-[10.5px] text-text-muted">赎回金额为实际到账，赎回单价显示扣费后净值（到账金额 ÷ 份额）。</div>
         )}
       </div>
 

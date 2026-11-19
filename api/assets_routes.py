@@ -1307,6 +1307,45 @@ async def patch_action(asset_id: int, action_id: int, data: ActionPatch):
     return {"message": "updated", **payload}
 
 
+class CashDividendCreate(BaseModel):
+    amount: float
+    trade_date: str
+    note: str = ""
+
+
+@router.post("/{asset_id}/dividends")
+async def add_cash_dividend(asset_id: int, data: CashDividendCreate):
+    """补录基金已到账的现金分红，按原始日期参与账本重算。"""
+    from datetime import date
+
+    user_id = require_user_id()
+    asset = await get_external_asset(asset_id, user_id=user_id)
+    if not asset:
+        raise HTTPException(404, "资产不存在")
+    if asset["asset_type"] != "FUND":
+        raise HTTPException(400, "仅基金支持补录现金分红")
+    if not math.isfinite(data.amount) or data.amount <= 0:
+        raise HTTPException(400, "分红金额必须为有限正数")
+    try:
+        day = date.fromisoformat(data.trade_date)
+    except ValueError:
+        raise HTTPException(400, "到账日期格式应为 YYYY-MM-DD")
+    if day.isoformat() != data.trade_date:
+        raise HTTPException(400, "到账日期格式应为 YYYY-MM-DD")
+    if day > date.today():
+        raise HTTPException(400, "到账日期不能晚于今天")
+
+    action_id = await add_external_action(
+        asset_id, "DIVIDEND", amount=data.amount, trade_date=data.trade_date,
+        note=data.note.strip(), status="confirmed", user_id=user_id,
+    )
+    actions = await list_external_actions(asset_id, user_id=user_id)
+    state = compute_external_state(actions, "FUND")
+    await update_external_asset(asset_id, cost_amount=state["cost_amount"],
+                                shares=state["shares"], user_id=user_id)
+    return {"message": "现金分红已录入", "id": action_id, "state": state}
+
+
 @router.get("/{asset_id}/actions")
 async def list_actions(asset_id: int):
     """列流水 + 当前 ledger 状态."""
