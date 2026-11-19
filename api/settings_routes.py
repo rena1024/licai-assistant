@@ -175,8 +175,8 @@ async def set_provider_config(data: ProviderConfig, request: Request):
 
 
 @router.delete("/provider")
-async def clear_provider_config(request: Request):
-    """清凭证并卸掉 provider。顺序不能反 —— 先卸了就没人知道该清哪些键了。"""
+async def clear_provider_config(request: Request, credentials_only: bool = False):
+    """个人设置只清本人凭证；管理入口可同时卸载全局插件。"""
     from services.providers import get_provider, reset_cache
     p = await get_provider()
     if p.credential_fields:
@@ -186,7 +186,7 @@ async def clear_provider_config(request: Request):
             pass
     from services import auth
     session = await auth.require_session(request)
-    if session.account.role == 'admin':
+    if session.account.role == 'admin' and not credentials_only:
         await set_config('market_provider','')
         import os
         os.environ.pop('MARKET_PROVIDER',None)

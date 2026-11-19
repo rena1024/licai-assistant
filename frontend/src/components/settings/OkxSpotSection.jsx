@@ -1,3 +1,4 @@
+import { settingsButton } from './buttonStyles'
 import { useEffect, useState } from 'react'
 import { fetchJSON } from '../../hooks/useApi'
 
@@ -50,7 +51,7 @@ export function OkxSpotSection() {
           </span>}
         </label>
         <button onClick={load}
-          className="text-[11px] px-2 py-0.5 rounded border border-border text-text-dim hover:text-text cursor-pointer">
+          className={settingsButton.secondary}>
           重新读取
         </button>
       </div>
@@ -74,7 +75,7 @@ export function OkxSpotSection() {
           </span>
           {r.action !== 'ok' && (
             <button onClick={() => sync(r)} disabled={busy === r.ccy}
-              className="ml-auto text-[11px] px-2 py-0.5 rounded bg-accent/20 text-accent border border-accent/40 hover:bg-accent/30 disabled:opacity-50 cursor-pointer">
+              className={`ml-auto ${settingsButton.primary}`}>
               {busy === r.ccy ? '同步中…' : (r.action === 'create' ? '按现价建仓' : '更新数量')}
             </button>
           )}

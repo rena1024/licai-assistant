@@ -13,6 +13,7 @@ import UnifiedPortfolio from './components/UnifiedPortfolio'
 import Rankings from './components/Rankings'
 import StockAsk from './components/StockAsk'
 import Settings from './components/Settings'
+import AdminPage from './components/AdminPage'
 import EditModal from './components/EditModal'
 import TransactionHistory from './components/TransactionHistory'
 // 市场·开盘情绪
@@ -89,10 +90,11 @@ function CardShell({ title, sub, children }) {
 }
 
 export default function App() {
-  return <div className="h-screen flex flex-col overflow-hidden"><AccountGate><PrivateApp /></AccountGate></div>
+  return <div className="h-screen flex flex-col overflow-hidden"><AccountGate>{account => <PrivateApp account={account} />}</AccountGate></div>
 }
 
-function PrivateApp() {
+function PrivateApp({ account }) {
+  const admin = account.role === 'admin'
   const [holdings, setHoldings] = useState([])
   const [marketOpen, setMarketOpen] = useState(false)
   const [editTarget, setEditTarget] = useState(null)
@@ -275,6 +277,9 @@ function PrivateApp() {
         <Settings onClose={() => setView('portfolio')} />
       </div>
     ),
+    ...Object.fromEntries(NAV.filter(section => section.adminOnly).flatMap(section => section.items).map(item => [item.key, () => (
+      <div className={`${PAD} max-w-[900px]`}><AdminPage admin={admin} page={item.key} title={item.label} /></div>
+    )])),
   }
 
   return (
@@ -288,7 +293,7 @@ function PrivateApp() {
       />
 
       <div className="flex flex-1 min-h-0">
-        <Sidebar active={view} onNav={setView} open={sidebarOpen} onToggle={() => setSidebarOpen(o => !o)} />
+        <Sidebar admin={admin} active={view} onNav={setView} open={sidebarOpen} onToggle={() => setSidebarOpen(o => !o)} />
 
         <main className="flex-1 min-w-0 flex flex-col min-h-0">
           {/* 仪表盘概览条 + 风险条: 固定在内容区顶部, 不随内容滚动 */}

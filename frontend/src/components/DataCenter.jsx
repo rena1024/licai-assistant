@@ -1,8 +1,9 @@
+import { settingsButton } from './settings/buttonStyles'
+import SaveStatus from './settings/SaveStatus'
 import { useEffect, useState } from 'react'
 import { fetchJSON } from '../hooks/useApi'
 
 const input = 'bg-bg border border-border rounded px-2 py-1.5 text-sm w-full'
-const button = 'border border-border rounded px-3 py-1.5 text-sm disabled:opacity-50'
 const providerNames = { sina: '新浪', tencent: '腾讯', eastmoney: '东方财富', em: '东方财富', cls: '财联社', ths: '同花顺', jin10: '金十' }
 
 export function SearchDisclosure({ enabled, onChange }) {
@@ -52,20 +53,22 @@ export function SourcePolicyForm({ policy, onChange }) {
 
 export function SearchChannelForm({ provider, saved, onSaved }) {
   const [error, setError] = useState('')
+  const [message, setMessage] = useState('')
   const [busy, setBusy] = useState(false)
   const save = async e => {
-    e.preventDefault(); setBusy(true); setError('')
-    const f = new FormData(e.currentTarget)
+    e.preventDefault(); setBusy(true); setError(''); setMessage('')
+    const form = e.currentTarget
+    const f = new FormData(form)
     const c = { provider, key: String(f.get('key') || ''), enabled: f.has('enabled'), remaining: f.get('remaining') === '' ? null : Number(f.get('remaining')), credits_per_request: Number(f.get('credits_per_request')), period: f.get('period'), verified_until: Math.floor(new Date(f.get('verified_until')).getTime() / 1000) || 0, evidence: f.get('evidence') }
     for (const field of ['free_confirmed', 'auto_pay_disabled', 'exclusive_key', 'storage_allowed']) c[field] = f.has(field)
-    try { await fetchJSON('/api/search/channels', { method: 'PUT', body: JSON.stringify({ ...c, expected_version: saved?.version || 0 }) }); await onSaved() } catch (e) { setError(e.message) } finally { setBusy(false) }
+    try { await fetchJSON('/api/search/channels', { method: 'PUT', body: JSON.stringify({ ...c, expected_version: saved?.version || 0 }) }); form.elements.namedItem('key').value = ''; await onSaved(); setMessage('已保存') } catch (e) { setError(e.message) } finally { setBusy(false) }
   }
   const checks = { free_confirmed: '已核实当前免费计划', auto_pay_disabled: '已关闭自动付费且不存在自动扣费路径', exclusive_key: '凭证仅本应用使用，余额可准确核验', storage_allowed: '条款允许保存问答引用的链接和摘要' }
-  return <form onSubmit={save} className="border border-border rounded p-3 space-y-3">
+  return <form onSubmit={save} onChange={() => { setMessage(''); setError('') }} className="border border-border rounded p-3 space-y-3">
     <h4 className="text-sm">{provider === 'tavily' ? 'Tavily（首选）' : 'Exa（备用）'} · {saved?.paused ? '因结果未知暂停' : saved?.enabled ? '已配置开放' : '未开放'}</h4>
     <p className="text-xs">可用 {saved?.available ?? '未知'} credits；额度独立于模型 Token，未核实免费条件时保持禁用。10 次/分钟、100 次/日/用户。</p>
     <div className="grid gap-3 sm:grid-cols-2">
-      <label className="text-xs">API Key<input className={input} type="password" name="key" autoComplete="off" placeholder={saved?.configured ? '已保存，留空保留' : '输入凭证'} /></label>
+      <label className="text-xs">API Key<input className={input} type="password" name="key" autoComplete="off" placeholder={saved?.configured ? '********' : '输入凭证'} />{saved?.configured && <span className="mt-1 block text-text-dim">已保存，留空保留原 Key</span>}</label>
       <label className="text-xs">本周期可分配免费总额（含本应用已用）<input className={input} name="remaining" type="number" min="0" defaultValue={saved?.remaining ?? ''} /></label>
       <label className="text-xs">每次保守预留 credits<input className={input} name="credits_per_request" type="number" min="1" required defaultValue={saved?.credits_per_request || 1} /></label>
       <label className="text-xs">额度周期（月）<input className={input} name="period" type="month" required defaultValue={saved?.period || new Date().toLocaleDateString('sv-SE', { timeZone: 'Asia/Shanghai' }).slice(0, 7)} /></label>
@@ -74,14 +77,16 @@ export function SearchChannelForm({ provider, saved, onSaved }) {
     </div>
     {Object.entries(checks).map(([key, label]) => <label key={key} className="flex gap-2 text-xs"><input name={key} type="checkbox" defaultChecked={saved?.[key] || false} />{label}</label>)}
     <label className="flex gap-2 text-sm"><input name="enabled" type="checkbox" defaultChecked={saved?.enabled || false} />开放免费搜索通道</label>
-    {error && <p role="alert" className="text-bear text-sm">{error}</p>}
-    <button className={button} disabled={busy}>{busy ? '保存中…' : `保存 ${provider} 配置`}</button>
+    <div className="flex flex-wrap items-center gap-3">
+      <button className={settingsButton.primary} disabled={busy}>{busy ? '保存中…' : `保存 ${provider} 配置`}</button>
+      <SaveStatus busy={busy} message={message} error={error} />
+    </div>
   </form>
 }
 
 export default function DataCenter() {
   const [data, setData] = useState(null)
-  const [channels, setChannels] = useState([])
+  const [channels, setChannels] = useState(null)
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
   const [busy, setBusy] = useState(false)
@@ -97,12 +102,16 @@ export default function DataCenter() {
   }
   return <section className="border-t border-border pt-4 space-y-4" aria-labelledby="data-center-title">
     <h3 id="data-center-title" className="text-sm font-semibold">管理：数据中心</h3>
-    {error && <p role="alert" className="text-bear text-sm">{error}</p>}{notice && <p role="status">{notice}</p>}
+    {!data && error && <p role="alert" className="text-bear text-sm">{error}</p>}
     {!data ? <p role="status">正在加载公共来源…</p> : <>
       <p className="text-xs text-text-muted">{data.coverage_note}</p>
-      <form onSubmit={save} className="space-y-3"><SourcePolicyForm policy={data.policy} onChange={policy => setData({ ...data, policy })} /><button className={button} disabled={busy}>保存来源策略</button></form>
+      <form onSubmit={save} onChange={() => { setNotice(''); setError('') }} className="space-y-3">
+        <SourcePolicyForm policy={data.policy} onChange={policy => setData({ ...data, policy })} />
+        <div className="flex flex-wrap items-center gap-3"><button className={settingsButton.primary} disabled={busy}>保存来源策略</button><SaveStatus busy={busy} message={notice} error={error} /></div>
+      </form>
       <div className="overflow-x-auto"><table className="text-xs w-full"><caption className="text-left py-2">最近来源状态（无记录表示尚未检查）</caption><thead><tr>{['能力/市场', '供应商', '状态', '最近尝试', '最近成功', '源时间'].map(t => <th className="text-left p-2" key={t}>{t}</th>)}</tr></thead><tbody>{data.status.map(s => <tr key={`${s.capability}:${s.provider}:${s.market}`}><td className="p-2">{s.capability}/{s.market}</td><td>{providerNames[s.provider] || s.provider}</td><td>{s.available ? '可用' : s.error}</td><td>{new Date(s.last_attempt * 1000).toLocaleString()}</td><td>{s.last_success ? new Date(s.last_success * 1000).toLocaleString() : '无'}</td><td>{s.source_at || '未知'}</td></tr>)}</tbody></table></div>
     </>}
-    {['tavily', 'exa'].map(provider => <SearchChannelForm key={`${provider}:${channels.find(c => c.provider === provider)?.version || 0}`} provider={provider} saved={channels.find(c => c.provider === provider)} onSaved={async () => { await load(); setNotice('搜索配置已保存，未发送真实测试请求') }} />)}
+    {/* 表单使用默认值初始化，须等已保存配置返回后再挂载，避免勾选和额度回填丢失。 */}
+    {channels === null ? !error && <p role="status">正在加载搜索配置…</p> : ['tavily', 'exa'].map(provider => <SearchChannelForm key={provider} provider={provider} saved={channels.find(c => c.provider === provider)} onSaved={load} />)}
   </section>
 }

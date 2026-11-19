@@ -1,3 +1,5 @@
+import SaveStatus from './SaveStatus'
+import { settingsButton } from './buttonStyles'
 import { useEffect, useState } from 'react'
 import { fetchJSON } from '../../hooks/useApi'
 
@@ -9,18 +11,19 @@ import { fetchJSON } from '../../hooks/useApi'
 
    表单是**通用的**: 要填哪几个字段由 provider 自己声明(后端 /api/settings/provider 的 fields),
    这里照着渲染 —— 换一个 provider 不用改这个组件。secret 字段只存不回显。 */
-export function ProviderSection({ admin = false }) {
+export function ProviderSection({ admin = false, managementOnly = false }) {
   const [st, setSt] = useState(null)
   const [spec, setSpec] = useState('')
   const [vals, setVals] = useState({})
   const [busy, setBusy] = useState('')
+  const [action, setAction] = useState('')
   const [msg, setMsg] = useState({ text: '', ok: null })
 
   const load = () => fetchJSON('/api/settings/provider').then(r => { setSt(r); setSpec(r?.spec || '') }).catch(() => {})
   useEffect(() => { load() }, [])
 
   const post = async (body, tag) => {
-    setBusy(tag); setMsg({ text: '', ok: null })
+    setAction(tag); setBusy(tag); setMsg({ text: '', ok: null })
     try {
       const r = await fetchJSON('/api/settings/provider', { method: 'POST', body: JSON.stringify(body) })
       setSt(r); setSpec(r?.spec || '')
@@ -30,9 +33,9 @@ export function ProviderSection({ admin = false }) {
   }
 
   const clear = async () => {
-    setBusy('clear')
+    setAction('clear'); setBusy('clear')
     try {
-      const r = await fetchJSON('/api/settings/provider', { method: 'DELETE' })
+      const r = await fetchJSON(`/api/settings/provider${admin ? '' : '?credentials_only=true'}`, { method: 'DELETE' })
       setSt(r); setSpec(''); setVals({}); setMsg({ text: admin ? '已卸载' : '本人凭证已清除', ok: null })
     } catch (e) { setMsg({ text: String(e?.message || e), ok: false }) } finally { setBusy('') }
   }
@@ -45,9 +48,9 @@ export function ProviderSection({ admin = false }) {
 
   return (
     <>
-      <div className="flex items-center justify-between mb-2">
+      <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
         <label className="text-[12px] text-text-dim font-semibold">扩展数据源（可选 · 深度龙虎榜 / 竞价异动 / 机构增仓）</label>
-        <span className="text-[11px] font-mono text-text-muted">
+        <span className="shrink-0 text-[11px] font-mono text-text-muted">
           {!st ? '' : st.load_error ? '加载失败' : !installed ? '未接入'
             : !fields.length ? st.display_name
             : st.valid ? `${st.display_name} · 已就绪` : st.configured ? '凭证失效' : '待填凭证'}
@@ -61,17 +64,18 @@ export function ProviderSection({ admin = false }) {
       </p>
 
       {/* provider 入口: "包名:类名"。留空 = 不接入 */}
-      {admin && <div className="flex items-center gap-2 mb-2">
-        <input className="flex-1 bg-bg border border-border rounded px-3 py-1.5 text-[12px] text-text font-mono outline-none focus:border-accent"
+      {admin && <div className="flex flex-wrap items-center gap-2 mb-2">
+        <input className="w-full min-w-0 sm:w-auto sm:flex-1 bg-bg border border-border rounded px-3 py-1.5 text-[12px] text-text font-mono outline-none focus:border-accent"
           placeholder="provider 入口，如 mypkg.provider:Provider（留空=不接入）"
-          value={spec} onChange={e => setSpec(e.target.value)} autoComplete="off" spellCheck={false} />
+          value={spec} onChange={e => { setSpec(e.target.value); setMsg({ text: '', ok: null }) }} autoComplete="off" spellCheck={false} />
         <button onClick={() => post({ spec }, 'spec')} disabled={!!busy || spec === (st?.spec || '')}
-          className="px-4 py-1.5 rounded-md bg-accent text-bg font-medium text-[13px] hover:opacity-90 disabled:opacity-50 cursor-pointer whitespace-nowrap">
+          className={settingsButton.primary}>
           {busy === 'spec' ? '加载中' : '装载'}
         </button>
+        <SaveStatus busy={busy === 'spec'} message={action === 'spec' && msg.ok !== false ? msg.text : ''} error={action === 'spec' && msg.ok === false ? msg.text : ''} />
         {installed && (
           <button onClick={clear} disabled={!!busy}
-            className="px-3 py-1.5 rounded-md border border-border text-text-dim text-[12px] hover:text-text disabled:opacity-40 cursor-pointer">卸载</button>
+            className={settingsButton.danger}>卸载</button>
         )}
       </div>}
 
@@ -81,34 +85,35 @@ export function ProviderSection({ admin = false }) {
           {candidates.map(d => (
             <button key={d.spec} onClick={() => setSpec(d.name)} disabled={!!busy}
               title={`${d.spec}${d.dist ? ` · ${d.dist} ${d.version}` : ''}`}
-              className="text-[11px] font-mono bg-surface-3 hover:bg-surface-2 border border-border-subtle rounded px-2 py-0.5 text-text-dim hover:text-text disabled:opacity-40 cursor-pointer">
+              className={settingsButton.secondary}>
               {d.name}{d.version && <span className="text-text-muted ml-1">{d.version}</span>}
             </button>
           ))}
         </div>
       )}
 
-      {!admin && installed && fields.length > 0 && <button type="button" onClick={clear} disabled={!!busy} className="mb-2 text-sm text-accent">清除本人凭证</button>}
+      {!managementOnly && !admin && installed && fields.length > 0 && <button type="button" onClick={clear} disabled={!!busy} className={`mb-2 ${settingsButton.danger}`}>清除本人凭证</button>}
 
       {st?.load_error && <div className="text-[11px] text-bear mb-2 break-all">{st.load_error}</div>}
 
       {/* 凭证表单: 字段由 provider 声明, 这里不写死任何一个 provider 的表单 */}
-      {installed && !st?.load_error && fields.length > 0 && (
+      {!managementOnly && installed && !st?.load_error && fields.length > 0 && (
         <>
-          <div className="flex items-center gap-2 mb-2 flex-wrap">
+          <div className="flex flex-wrap items-center gap-2 mb-2 flex-wrap">
             {fields.map(f => (
               <input key={f.key}
                 className={`${f.echo ? 'w-32' : 'flex-1 min-w-[160px]'} bg-bg border border-border rounded px-3 py-1.5 text-[12px] text-text font-mono outline-none focus:border-accent`}
                 type={f.secret ? 'password' : 'text'}
                 placeholder={f.placeholder || f.label}
                 value={vals[f.key] || ''}
-                onChange={e => setVals(v => ({ ...v, [f.key]: e.target.value }))}
+                onChange={e => { setVals(v => ({ ...v, [f.key]: e.target.value })); setMsg({ text: '', ok: null }) }}
                 autoComplete="off" spellCheck={false} />
             ))}
             <button onClick={() => post({ values: vals }, 'creds')} disabled={!!busy || !canSaveCreds}
-              className="px-4 py-1.5 rounded-md bg-accent text-bg font-medium text-[13px] hover:opacity-90 disabled:opacity-50 cursor-pointer whitespace-nowrap">
+              className={settingsButton.primary}>
               {busy === 'creds' ? '验证中' : '保存并验证'}
             </button>
+            <SaveStatus busy={busy === 'creds'} message={action === 'creds' && msg.ok !== false ? msg.text : ''} error={action === 'creds' && msg.ok === false ? msg.text : ''} />
           </div>
           <p className="text-[11px] text-text-muted mb-2 leading-relaxed">
             凭证存本机数据库、不进代码库；标了 secret 的字段界面不回显明文。
@@ -125,7 +130,7 @@ export function ProviderSection({ admin = false }) {
         </div>
       )}
 
-      {msg.text && (
+      {action === 'clear' && msg.text && (
         <span className={`text-[12px] font-medium break-all ${msg.ok === true ? 'text-bull' : msg.ok === false ? 'text-bear' : 'text-text-dim'}`}>
           {msg.text}
         </span>

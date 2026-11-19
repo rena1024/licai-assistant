@@ -1,14 +1,14 @@
+import { settingsButton } from './settings/buttonStyles'
 import { useEffect, useState } from 'react'
 import { fetchJSON } from '../hooks/useApi'
 
-const button = 'px-3 py-1.5 rounded border border-border text-[12px] disabled:opacity-50'
 
 export function BackupList({ points, busy, onSelect }) {
   return <ul className="space-y-2">
     {points.map(point => <li key={point.id} className="flex flex-wrap items-center justify-between gap-2 border border-border rounded p-2">
       <div className="min-w-0"><span className="block break-all font-mono text-[11px]">{point.id}</span>
         <span className="text-text-muted text-[11px]">{new Date(point.created_at * 1000).toLocaleString()} · {point.file_count} 个文件</span></div>
-      <button className={button} disabled={busy} onClick={() => onSelect(point.id)}>选择恢复点</button>
+      <button className={settingsButton.secondary} disabled={busy} onClick={() => onSelect(point.id)}>选择恢复点</button>
     </li>)}
   </ul>
 }
@@ -47,8 +47,8 @@ export default function OperationsPanel() {
       {state.backup_error && <span className="text-bear"> · 备份失败，请检查本机空间及运行日志</span>}
       <br />云端调用：{state.cloud_hold ? '隔离中' : '按服务策略控制'} · Trace：{state.trace.enabled ? '临时开启，最长 30 分钟' : '关闭'}</p>}
     <div className="flex flex-wrap gap-2">
-      <button className={button} disabled={busy} onClick={() => perform('/api/admin/backups')}>创建备份</button>
-      <button className={button} disabled={busy || !state} onClick={() => perform('/api/admin/trace', { enabled: !state?.trace.enabled })}>
+      <button className={settingsButton.secondary} disabled={busy} onClick={() => perform('/api/admin/backups')}>创建备份</button>
+      <button className={settingsButton.secondary} disabled={busy || !state} onClick={() => perform('/api/admin/trace', { enabled: !state?.trace.enabled })}>
         {state?.trace.enabled ? '关闭 Trace' : '临时开启 Trace'}</button>
     </div>
     <BackupList points={points} busy={busy} onSelect={id => { setSelected(id); setConfirmation('') }} />
@@ -58,9 +58,9 @@ export default function OperationsPanel() {
       <label className="block text-[11px] break-all" htmlFor="restore-confirmation">{selected}</label>
       <input id="restore-confirmation" className="w-full rounded border border-border bg-bg p-2 text-[12px]" autoComplete="off"
         disabled={busy} value={confirmation} onChange={event => setConfirmation(event.target.value)} />
-      <div className="flex gap-2"><button className={button} disabled={busy || confirmation !== selected}
+      <div className="flex gap-2"><button className={settingsButton.danger} disabled={busy || confirmation !== selected}
         onClick={() => perform(`/api/admin/backups/${encodeURIComponent(selected)}/restore`, { confirmation }, true)}>确认恢复并重新登录</button>
-        <button className={button} disabled={busy} onClick={() => setSelected('')}>取消</button></div>
+        <button className={settingsButton.secondary} disabled={busy} onClick={() => setSelected('')}>取消</button></div>
     </div>}
     <p role="status" className="text-[12px]">{busy ? '处理中，请等待完成…' : message}</p>
   </section>

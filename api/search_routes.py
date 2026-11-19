@@ -34,5 +34,7 @@ async def save_channel(request: Request):
         if type(version) is not int or version<0:
             raise ValueError()
         return await search.save_channel(data,expected_version=version)
+    except search.SearchConfigError as exc:
+        raise HTTPException(exc.status, str(exc)) from None
     except (ValueError,KeyError,TypeError,AttributeError):
         raise HTTPException(422,'搜索配置无效，请核对免费条件、额度、有效期及版本') from None

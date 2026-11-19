@@ -1,5 +1,7 @@
+import { settingsButton } from './buttonStyles'
 import { useEffect, useState } from 'react'
 import { fetchJSON } from '../../hooks/useApi'
+import useLLMStatus from '../../hooks/useLLMStatus'
 
 /* 从"用户纠正"里沉淀出来的候选规则。
    批准的会写进 agent 的 system prompt(下一次问答就生效), 待审的一条都不生效。
@@ -10,6 +12,7 @@ export function PromptRulesSection() {
   const [busy, setBusy] = useState(0)          // 正在处理的规则 id
   const [mining, setMining] = useState(false)
   const [msg, setMsg] = useState('')
+  const llm = useLLMStatus(mining)
 
   const load = () => fetchJSON('/api/settings/rules')
     .then(setData).catch(() => setData({ rules: [], n_pending: 0, n_active: 0 }))
@@ -29,7 +32,7 @@ export function PromptRulesSection() {
   const mine = async () => {
     setMining(true); setMsg('挖掘中(要调模型, 十几秒)…')
     try {
-      const r = await fetchJSON('/api/settings/rules/mine', { method: 'POST' })
+      const r = await fetchJSON('/api/settings/rules/mine', { method: 'POST', headers: llm.headers })
       setMsg(`新纠正 ${r.corrections} 条 → 新增候选 ${r.added}, 判为非规则 ${r.skipped}, 重复 ${r.dup}, 失败 ${r.failed}`)
       await load()
     } catch (e) {
@@ -54,10 +57,11 @@ export function PromptRulesSection() {
           )}
         </label>
         <button onClick={mine} disabled={mining}
-          className="text-[11px] px-2 py-0.5 rounded border border-border text-text-dim hover:text-text disabled:opacity-50 cursor-pointer">
+          className={settingsButton.secondary}>
           {mining ? '挖掘中…' : '立刻挖一次'}
         </button>
       </div>
+      {mining && <p role="status" className="text-xs text-text-dim mb-2">{llm.label}</p>}
       <p className="text-[11px] text-text-muted mb-2">
         从你历次「不对/怎么还是」这类纠正里自动起草。<b>批准了才进 prompt</b>，待审的一条都不生效 ——
         prompt 对单个词都敏感，一条坏规则会静默影响所有回答。自动 AI 默认关闭，开放并启用后按计划挖掘。
@@ -74,11 +78,11 @@ export function PromptRulesSection() {
           )}
           <div className="flex items-center gap-2 mt-1.5">
             <button onClick={() => decide(r.id, 'approve')} disabled={busy === r.id}
-              className="text-[11px] px-2 py-0.5 rounded bg-accent/20 text-accent border border-accent/40 hover:bg-accent/30 disabled:opacity-50 cursor-pointer">
+              className={settingsButton.primary}>
               批准进 prompt
             </button>
             <button onClick={() => decide(r.id, 'reject')} disabled={busy === r.id}
-              className="text-[11px] px-2 py-0.5 rounded border border-border text-text-dim hover:text-text disabled:opacity-50 cursor-pointer">
+              className={settingsButton.danger}>
               否决
             </button>
           </div>
@@ -93,7 +97,7 @@ export function PromptRulesSection() {
               <span className="text-text-muted"> {r.body}</span>
               <button onClick={() => decide(r.id, 'reject')} disabled={busy === r.id}
                 title="从 prompt 里撤掉"
-                className="ml-1 text-[10px] px-1 rounded border border-border text-text-muted hover:text-bear disabled:opacity-50 cursor-pointer">
+                className={`ml-1 ${settingsButton.danger}`}>
                 撤掉
               </button>
             </div>

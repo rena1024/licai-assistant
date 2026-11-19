@@ -1,3 +1,5 @@
+import SaveStatus from './SaveStatus'
+import { settingsButton } from './buttonStyles'
 import { useEffect, useState } from 'react'
 import { fetchJSON } from '../../hooks/useApi'
 
@@ -11,6 +13,7 @@ export function ZsxqSection() {
   const [avail, setAvail] = useState(null)
   const [picked, setPicked] = useState([])
   const [busy, setBusy] = useState('')
+  const [action, setAction] = useState('')
   const [msg, setMsg] = useState({ text: '', ok: null })
 
   const load = async () => {
@@ -22,7 +25,7 @@ export function ZsxqSection() {
   useEffect(() => { load() }, [])
 
   const saveUrl = async () => {
-    setBusy('url'); setMsg({ text: '保存并连接...', ok: null })
+    setAction('url'); setBusy('url'); setMsg({ text: '保存并连接...', ok: null })
     try {
       const r = await fetchJSON('/api/settings/zsxq', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -31,14 +34,14 @@ export function ZsxqSection() {
       setUrl('')
       const d = await fetchJSON('/api/settings/zsxq')
       setSt(d)
-      setMsg(d.ok ? { text: `已连接${d.account ? ` · ${d.account}` : ''}`, ok: true }
+      setMsg(d.ok ? { text: `已保存 · 已连接${d.account ? ` · ${d.account}` : ''}`, ok: true }
                   : { text: d.error || (r.endpoint ? '已保存, 但连不上' : '已清空'), ok: !!r.endpoint === false })
     } catch (e) { setMsg({ text: '保存失败: ' + (e.message || e), ok: false }) }
     setBusy('')
   }
 
   const pull = async () => {
-    setBusy('pull'); setMsg({ text: '读取星球列表...', ok: null })
+    setAction('pull'); setBusy('pull'); setMsg({ text: '读取星球列表...', ok: null })
     try {
       const r = await fetchJSON('/api/settings/zsxq/available')
       if (r.ok) { setAvail(r.groups || []); setMsg({ text: `找到 ${(r.groups || []).length} 个星球`, ok: true }) }
@@ -47,21 +50,26 @@ export function ZsxqSection() {
     setBusy('')
   }
 
-  const toggle = (g) => setPicked(p => p.some(x => x.group_id === g.group_id)
-    ? p.filter(x => x.group_id !== g.group_id)
-    : [...p, { group_id: g.group_id, name: g.name, owner_only: false }])
+  const toggle = (g) => {
+    setMsg({ text: '', ok: null })
+    setPicked(p => p.some(x => x.group_id === g.group_id)
+      ? p.filter(x => x.group_id !== g.group_id)
+      : [...p, { group_id: g.group_id, name: g.name, owner_only: false }])
+  }
 
-  const setOwnerOnly = (gid, v) => setPicked(p => p.map(x =>
-    x.group_id === gid ? { ...x, owner_only: v } : x))
+  const setOwnerOnly = (gid, v) => {
+    setMsg({ text: '', ok: null })
+    setPicked(p => p.map(x => x.group_id === gid ? { ...x, owner_only: v } : x))
+  }
 
   const saveGroups = async () => {
-    setBusy('save')
+    setAction('save'); setBusy('save'); setMsg({ text: '', ok: null })
     try {
       const r = await fetchJSON('/api/settings/zsxq', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ groups: picked }),
       })
-      setMsg({ text: r.enabled ? `已接入 ${r.groups.length} 个星球` : '已关闭(未选星球)', ok: true })
+      setMsg({ text: r.enabled ? `已保存 · 已接入 ${r.groups.length} 个星球` : '已保存 · 已关闭(未选星球)', ok: true })
       load()
     } catch (e) { setMsg({ text: '保存失败: ' + (e.message || e), ok: false }) }
     setBusy('')
@@ -83,31 +91,33 @@ export function ZsxqSection() {
         原文不落库，返回一律按 <span className="font-mono">[星球观点]</span> 单独一档标注，
         不作为数字依据、不转成买卖建议。不勾星球=完全不启用。
       </p>
-      <div className="flex items-center gap-2 mb-2">
+      <div className="flex flex-wrap items-center gap-2 mb-2">
         <input
           className="flex-1 bg-bg border border-border rounded px-3 py-1.5 text-[12px] text-text font-mono outline-none focus:border-accent"
           placeholder={st?.endpoint ? `已配置: ${st.endpoint}（重填可覆盖）` : 'https://mcp.zsxq.com/topic/mcp?api_key=...'}
-          value={url} onChange={e => setUrl(e.target.value)} autoComplete="off" spellCheck={false}
+          value={url} onChange={e => { setUrl(e.target.value); setMsg({ text: '', ok: null }) }} autoComplete="off" spellCheck={false}
         />
         <button onClick={saveUrl} disabled={!!busy}
-          className="px-3 py-1.5 rounded-md border border-accent/50 text-accent text-[12px] hover:bg-accent/10 disabled:opacity-50 cursor-pointer whitespace-nowrap">
+          className={settingsButton.primary}>
           {busy === 'url' ? '连接中' : '保存端点'}
         </button>
+        <SaveStatus busy={busy === 'url'} message={action === 'url' && !busy && msg.ok !== false ? msg.text : ''} error={action === 'url' && !busy && msg.ok === false ? msg.text : ''} />
       </div>
       <p className="text-[11px] text-text-muted mb-2 leading-relaxed">
         URL 里带 api_key —— 按当前账号存在本机运行目录、不进代码库、界面只回显 <span className="font-mono">host/path</span>。
         端点从知识星球官方 MCP 服务拿。
       </p>
-      <div className="flex items-center gap-3 mb-2">
+      <div className="flex flex-wrap items-center gap-3 mb-2">
         <button onClick={pull} disabled={!!busy || !st?.configured}
-          className="px-3 py-1.5 rounded-md border border-border text-text-dim text-[12px] hover:text-text disabled:opacity-40 cursor-pointer">
+          className={settingsButton.secondary}>
           {busy === 'pull' ? '读取中' : '读取我的星球'}
         </button>
         <button onClick={saveGroups} disabled={!!busy}
-          className="px-4 py-1.5 rounded-md bg-accent text-bg font-medium text-[13px] hover:opacity-90 disabled:opacity-50 cursor-pointer">
+          className={settingsButton.primary}>
           {busy === 'save' ? '保存中...' : '保存选择'}
         </button>
-        {msg.text && (
+        <SaveStatus busy={busy === 'save'} message={action === 'save' && !busy && msg.ok !== false ? msg.text : ''} error={action === 'save' && !busy && msg.ok === false ? msg.text : ''} />
+        {action === 'pull' && msg.text && (
           <span className={`text-[12px] font-medium break-all
             ${msg.ok === true ? 'text-bull' : msg.ok === false ? 'text-bear' : 'text-text-dim'}`}>
             {msg.text}

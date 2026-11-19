@@ -15,6 +15,12 @@ const ICONS = {
   allocation: <><circle cx="12" cy="12" r="8" /><path d="M12 4v8l7 3" /></>,
   open: <><circle cx="12" cy="12" r="8" /><path d="M12 8v4l3 2" /><path d="M12 2v2M22 12h-2" /></>,
   capital: <><path d="M4 20V10M10 20V4M16 20v-7M22 20H2" /></>,
+  'admin-users': <><circle cx="9" cy="8" r="3" /><path d="M3 21v-3a6 6 0 0112 0v3M16 5a3 3 0 010 6M18 15a5 5 0 013 5" /></>,
+  'admin-models': <><rect x="4" y="3" width="16" height="7" rx="2" /><rect x="4" y="14" width="16" height="7" rx="2" /><path d="M8 6.5h.01M8 17.5h.01M12 7h5M12 18h5" /></>,
+  'admin-usage': <><path d="M4 4v16h16M8 16v-4M12 16V6M16 16V9" /></>,
+  'admin-data': <><ellipse cx="12" cy="5" rx="8" ry="3" /><path d="M4 5v14c0 4 16 4 16 0V5M4 12c0 4 16 4 16 0" /></>,
+  'admin-system': <><path d="M4 7h16M4 17h16" /><circle cx="9" cy="7" r="3" /><circle cx="15" cy="17" r="3" /></>,
+  'admin-operations': <><path d="M4 10a8 8 0 111 8M4 4v6h6M12 8v5l3 2" /></>,
 }
 
 // 顶层按「我的钱 / 看市场」分组 —— 边界是"跟我的钱有关 vs 无关",
@@ -42,6 +48,14 @@ export const NAV = [
     { key: 'macro',    label: '宏观' },
     { key: 'news',     label: '资讯' },
   ] },
+  { group: '管理', adminOnly: true, items: [
+    { key: 'admin-users', label: '账号管理' },
+    { key: 'admin-models', label: '模型服务' },
+    { key: 'admin-usage', label: '用量与预算' },
+    { key: 'admin-data', label: '数据与搜索' },
+    { key: 'admin-system', label: '系统配置' },
+    { key: 'admin-operations', label: '备份与维护' },
+  ] },
   { group: null, items: [
     { key: 'ask',      label: '问问市场' },
     { key: 'settings', label: '设置' },
@@ -58,7 +72,7 @@ if (import.meta.env.DEV) {
   if (orphan.length) console.warn(`Sidebar: 这些图标已无对应 NAV 项: ${orphan.join(', ')}`)
 }
 
-export default function Sidebar({ active, onNav, open, onToggle }) {
+export default function Sidebar({ active, onNav, open, onToggle, admin = false }) {
   return (
     <aside className={`shrink-0 border-r border-border bg-surface/60 backdrop-blur-xl flex flex-col transition-[width] duration-200 ${open ? 'w-44' : 'w-14'}`}>
       <button onClick={onToggle} title={open ? '收起' : '展开'}
@@ -70,7 +84,7 @@ export default function Sidebar({ active, onNav, open, onToggle }) {
       </button>
 
       <nav className="flex-1 py-2 overflow-y-auto">
-        {NAV.map((sec, si) => (
+        {NAV.filter(sec => !sec.adminOnly || admin).map((sec, si) => (
           <div key={sec.group || `misc-${si}`}>
             {/* 展开时显示分组标题; 折叠时只剩图标, 文字无处安放 → 退化成一条分隔线。
                 分隔线的职责是"隔开两组", 首组之前无组可隔 —— 所以 si > 0 才画,
@@ -83,7 +97,7 @@ export default function Sidebar({ active, onNav, open, onToggle }) {
             {sec.items.map(n => {
               const on = active === n.key
               return (
-                <button key={n.key} onClick={() => onNav(n.key)} title={n.label}
+                <button key={n.key} onClick={() => onNav(n.key)} title={n.label} aria-current={on ? 'page' : undefined}
                   className={`w-full flex items-center gap-3 px-4 h-11 text-left transition-colors
                     ${on ? 'text-accent bg-accent/12 border-r-2 border-accent' : 'text-text-dim hover:text-text hover:bg-surface-3/50 border-r-2 border-transparent'}`}>
                   <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" className="shrink-0">

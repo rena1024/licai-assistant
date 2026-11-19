@@ -46,6 +46,13 @@ class Channel(BaseModel):
     evidence: str = Field(default='', max_length=1000)
 
 
+class SearchConfigError(ValueError):
+    """只包含固定字段提示，可安全返回给界面，不携带凭证或请求原文。"""
+    def __init__(self, message, *, status=422):
+        self.status = status
+        super().__init__(message)
+
+
 def account_id(channel):
     return hashlib.sha256((channel['provider']+':'+channel['key']).encode()).hexdigest()
 
@@ -58,12 +65,22 @@ async def save_channel(data, *, expected_version):
         await _require_admin(db, require_user_id())
         old = await (await db.execute('SELECT * FROM search_channels WHERE provider=?',(c['provider'],))).fetchone()
         if (old['version'] if old else 0) != expected_version:
-            raise ValueError('配置版本已变化，请刷新')
+            raise SearchConfigError('搜索配置已被修改，请刷新页面后重新填写并保存。', status=409)
         if not c['key'] and old:
             c['key'] = json.loads(old['config'])['key']
-        if c['enabled'] and not (c['key'] and c['remaining'] is not None and c['evidence'] and
-                all(c[k] for k in ('free_confirmed','auto_pay_disabled','exclusive_key','storage_allowed'))):
-            raise ValueError('须核实免费余额、无自动付费、独占凭证与引用存储条件')
+        if c['enabled']:
+            requirements = [
+                (bool(c['key']), '填写 API Key'),
+                (c['remaining'] is not None, '填写本周期可分配免费总额'),
+                (bool(c['evidence'].strip()), '填写核验依据'),
+                (c['free_confirmed'], '确认当前免费计划'),
+                (c['auto_pay_disabled'], '确认已关闭自动付费且不存在自动扣费路径'),
+                (c['exclusive_key'], '确认凭证仅本应用使用，余额可准确核验'),
+                (c['storage_allowed'], '确认条款允许保存问答引用的链接和摘要'),
+            ]
+            missing = [label for satisfied, label in requirements if not satisfied]
+            if missing:
+                raise SearchConfigError('无法开放搜索通道，请完成：' + '；'.join(missing) + '。')
         await db.execute('INSERT INTO search_channels VALUES (?,?,?,0) ON CONFLICT(provider) DO UPDATE SET version=excluded.version,config=excluded.config,paused=0',
                          (c['provider'], expected_version+1, json.dumps(c)))
         from services import audit, accounts

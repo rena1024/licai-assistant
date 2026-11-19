@@ -116,7 +116,7 @@ export default function AccountGate({ children }) {
       <button onClick={logout}>退出登录</button>
       {error && <span role="alert">{error}</span>}
     </div>
-    <div className="flex-1 min-h-0">{children}</div>
+    <div className="flex-1 min-h-0">{typeof children === 'function' ? children(state.account) : children}</div>
     </div>
     {switching && <div className="fixed inset-0 z-[100] overflow-y-auto bg-bg">
       <AccountForm mode="switch" currentUsername={state.account.username} onSuccess={reloadAccount} onCancel={() => setSwitching(false)} />

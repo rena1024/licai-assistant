@@ -1,21 +1,19 @@
+import SaveStatus from './settings/SaveStatus'
+import { settingsButton } from './settings/buttonStyles'
 import { useEffect, useState } from 'react'
-import AdminUsers from './AdminUsers'
-import OperationsPanel from './OperationsPanel'
 import UsagePanel from './UsagePanel'
 import ModelSettings from './ModelSettings'
-import DataCenter, { SearchPreferences } from './DataCenter'
+import { SearchPreferences } from './DataCenter'
 import NotificationSettings from './NotificationSettings'
 import { fetchJSON } from '../hooks/useApi'
 import { AttributionSection } from './settings/AttributionSection'
 import { ProviderSection } from './settings/ProviderSection'
 import { OkxSpotSection } from './settings/OkxSpotSection'
 import { PromptRulesSection } from './settings/PromptRulesSection'
-import { ProxySection } from './settings/ProxySection'
 import { ZsxqSection } from './settings/ZsxqSection'
 
 
 export default function Settings({ onClose }) {
-  const [admin, setAdmin] = useState(false)
 
   // OKX credentials
   const [okxStatus, setOkxStatus] = useState(null)
@@ -30,10 +28,7 @@ export default function Settings({ onClose }) {
   }
 
   useEffect(() => {
-    let active = true
-    fetchJSON('/api/auth/me').then(data => { if (active) setAdmin(data.account.role === 'admin') }).catch(() => {})
     loadOkxStatus()
-    return () => { active = false }
   }, [])
 
   const saveOkx = async () => {
@@ -79,20 +74,14 @@ export default function Settings({ onClose }) {
       <div className="flex items-center justify-between px-4 py-3 border-b border-border">
         <h2 className="text-base font-semibold text-accent">设置</h2>
         <button onClick={onClose}
-          className="text-[12px] px-3 py-1 rounded-md border border-border text-text-dim hover:text-text transition-colors cursor-pointer">
+          className={settingsButton.secondary}>
           关闭
         </button>
       </div>
       <div className="p-4 space-y-3">
-        <UsagePanel admin={admin} />
+        <UsagePanel />
         <SearchPreferences />
-        {admin && <DataCenter />}
-        <NotificationSettings admin={admin} />
-
-        {/* 本地代理 (OKX/外发统一) */}
-        <div className="mt-2 pt-4 border-t border-border">
-          {admin && <ProxySection />}
-        </div>
+        <NotificationSettings showMessages={false} />
 
         {/* OKX API 凭证 */}
         <div className="mt-2 pt-4 border-t border-border">
@@ -118,7 +107,7 @@ export default function Settings({ onClose }) {
 
           {!okxStatus?.configured ? (
             <>
-              <div className="grid grid-cols-1 gap-2 mb-2">
+              <div className="grid grid-cols-1 gap-2 mb-2" onChange={() => setOkxStatusText({ text: '', ok: null })}>
                 <input type="password"
                   className="bg-bg border border-border rounded px-3 py-1.5 text-[12px] text-text font-mono outline-none focus:border-accent"
                   placeholder="API Key" value={okxApiKey}
@@ -132,24 +121,17 @@ export default function Settings({ onClose }) {
                   placeholder="Passphrase (创建 Key 时你设的)" value={okxPassphrase}
                   onChange={e => setOkxPassphrase(e.target.value)} />
               </div>
-              <div className="flex items-center gap-3">
+              <div className="flex flex-wrap items-center gap-3">
                 <button onClick={saveOkx} disabled={okxSaving}
-                  className="px-4 py-1.5 rounded-md bg-accent text-bg font-medium text-[13px] hover:opacity-90 disabled:opacity-50">
+                  className={settingsButton.primary}>
                   {okxSaving ? '校验中...' : '保存并校验'}
                 </button>
-                {okxStatusText.text && (
-                  <span className={`text-[12px] ${
-                    okxStatusText.ok === true ? 'text-bull'
-                    : okxStatusText.ok === false ? 'text-bear' : 'text-text-dim'
-                  }`}>
-                    {okxStatusText.text}
-                  </span>
-                )}
+                <SaveStatus busy={okxSaving} message={okxStatusText.ok !== false ? okxStatusText.text : ''} error={okxStatusText.ok === false ? okxStatusText.text : ''} />
               </div>
             </>
           ) : (
             <button onClick={clearOkx}
-              className="px-3 py-1 rounded border border-bear/40 text-bear hover:bg-bear/10 text-[12px]">
+              className={settingsButton.danger}>
               清除凭证
             </button>
           )}
@@ -157,7 +139,7 @@ export default function Settings({ onClose }) {
 
         {/* LLM 配置 */}
         <div className="mt-2 pt-4 border-t border-border">
-          <ModelSettings admin={admin} />
+          <ModelSettings />
         </div>
 
         {/* 知识星球(可选, 只读) */}
@@ -167,9 +149,7 @@ export default function Settings({ onClose }) {
 
         {/* 扩展数据源(可选): 深度龙虎榜席位身份 / 竞价异动 / 机构增仓等自带公开源没有的口径 */}
         <div className="mt-2 pt-4 border-t border-border">
-          <ProviderSection admin={admin} />
-          {admin && <AdminUsers />}
-          {admin && <OperationsPanel />}
+          <ProviderSection />
         </div>
 
         {/* OKX 策略之外的现货 */}
