@@ -90,7 +90,7 @@ export default function UnifiedPortfolio({ holdings, onEdit, onHistory, onAdd, d
       //  1) 股票: 当前持仓段的 realized 已被「综合成本法」摊进剩余成本 → 行内浮动已含。
       //     只补 realized_carry (已平仓段 + 分红, 后端算好), 含清仓后又复活的旧那轮。
       //  2) CASH 的 realized(利息) 已作为现金行的 pnl 计入浮动 → 资产已实现里排除 CASH。
-      // FUND/CRYPTO/WEALTH 的成本只算剩余 lot, 浮动不含 realized, 所以全额计入。
+      // 基金持有收益已含剩余持仓分红，后端 closed_realized 已扣掉这部分，避免重复计入。
       const stockCarry = s.total_realized_carry != null
         ? s.total_realized_carry
         : (s.items || []).filter(it => !it.still_holding).reduce((sum, it) => sum + (it.realized_pnl || 0), 0)

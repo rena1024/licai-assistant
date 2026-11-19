@@ -13,6 +13,8 @@ import { formatCurrencyMoney } from './helpers'
 //   - 跨行才算得出来的: totalMv(算占比) / insights(同源家族)
 //   - 动作: actions 一个对象整体转给 RowActions(它的入参本来就是这几个)
 export function HoldingRow({ row, isLast, hovered, onHover, totalMv, insights, carry, hasThesis, actions }) {
+  const realizedOutsideHolding = (row._raw?.realized_pnl || 0)
+    - (row.type === 'F' ? (row._raw?.holding_dividend || 0) : (row._raw?.cycle_realized || 0))
   return (
   <div
     onMouseEnter={() => onHover(row.id)}
@@ -170,28 +172,32 @@ export function HoldingRow({ row, isLast, hovered, onHover, totalMv, insights, c
         </Tooltip>
       ) : (
         <>
-          <span className={`font-mono text-[12.5px] font-semibold tabular-nums ${priceColor(row.pnl)}`}>
+          <span title={row.type === 'F' ? `持有收益 = 持仓市值 − 平均持有成本 + 剩余持仓分红（¥${fmtMoney(row._raw?.holding_dividend || 0)}）` : undefined}
+            className={`font-mono text-[12.5px] font-semibold tabular-nums ${priceColor(row.pnl)}`}>
             {row.pnl != null ? (row.pnl >= 0 ? '+' : '') + fmtMoney(row.pnl) : '--'}
           </span>
-          <span className={`font-mono text-[10px] opacity-85 ${priceColor(row.pnlPct)}`}>
+          <span title={row.type === 'F' ? '持有收益率 = 持有收益 ÷ 平均持有成本 × 100%' : undefined}
+            className={`font-mono text-[10px] opacity-85 ${priceColor(row.pnlPct)}`}>
             {row.pnlPct != null ? fmtPct(row.pnlPct) : ''}
           </span>
           {row.type === 'A' && Math.abs(carry || 0) > 0.5 && (() => {
             const total = (row.pnl || 0) + carry
             return (
-              <Tooltip content="全周期真实盈亏 = 当前持仓浮动 + 历史已实现(清仓段/部分卖出)。清仓后又买回的票, 行内浮动只算这手, 这里把历史亏赚补回来。">
+              <Tooltip content="全周期盈亏包含当前持仓盈亏以及尚未计入持仓盈亏的历史已实现收益。">
                 <div className={`font-mono text-[9.5px] ${priceColor(total)} opacity-90 cursor-help`}>
                   真实 {total >= 0 ? '+' : ''}{fmtMoney(total)}
                 </div>
               </Tooltip>
             )
           })()}
-          {row.type !== 'A' && row.type !== 'M' && Math.abs((row._raw?.realized_pnl || 0) - (row._raw?.cycle_realized || 0)) > 0.5 && (() => {
-            const total = (row.pnl || 0) + (row._raw.realized_pnl || 0) - (row._raw.cycle_realized || 0)
+          {row.type !== 'A' && row.type !== 'M' && Math.abs(realizedOutsideHolding) > 0.5 && (() => {
+            const total = (row.pnl || 0) + realizedOutsideHolding
             return (
-              <Tooltip content="全周期真实盈亏 = 当前浮动 + 已实现(卖出/赎回的配对盈亏 + 利息分红)。卖掉部分的亏赚不在浮动里, 这里补齐——卖亏了再低位买回时, 浮动转正但真实口径仍记着那笔亏。">
+              <Tooltip content={row.type === 'F'
+                ? '累计总收益 = 持有收益 + 全部已实现收益 − 已包含在持有收益中的剩余持仓分红，分红只计算一次。'
+                : '全周期真实盈亏 = 当前浮动 + 已实现(卖出/赎回的配对盈亏 + 利息分红)。卖掉部分的亏赚不在浮动里, 这里补齐——卖亏了再低位买回时, 浮动转正但真实口径仍记着那笔亏。'}>
                 <div className={`font-mono text-[9.5px] ${priceColor(total)} opacity-90 cursor-help`}>
-                  真实 {total >= 0 ? '+' : ''}{fmtMoney(total)}
+                  {row.type === 'F' ? '累计' : '真实'} {total >= 0 ? '+' : ''}{fmtMoney(total)}
                 </div>
               </Tooltip>
             )
@@ -199,7 +205,7 @@ export function HoldingRow({ row, isLast, hovered, onHover, totalMv, insights, c
         </>
       )}
     </div>
-    <div className="text-right">
+    <div className="text-center">
       {row.type === 'M' && row.extra?.dailyInterestEst ? (
         <Tooltip content={
           <div>

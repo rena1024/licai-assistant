@@ -479,7 +479,7 @@ export function ReduceLotRow({ asset, onDone, onCancel }) {
         {estRealized && (
           <div className="bg-surface-3 rounded-md px-3 py-2 flex items-center justify-between">
             <span className="text-[11.5px] text-text-dim">
-              {estRealized.type === 'realized' ? '预估实现盈亏 (FIFO 比例)' : '占用成本 (赎回份额所占成本)'}
+              {estRealized.type === 'realized' ? (t === 'FUND' ? '预估实现盈亏 (平均成本)' : '预估实现盈亏 (FIFO 比例)') : '占用成本 (赎回份额所占成本)'}
             </span>
             <span className={`font-mono font-semibold text-[13px] ${
               estRealized.type === 'realized'

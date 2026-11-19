@@ -17,10 +17,11 @@ def test_split_scales_lots_cost_unchanged():
     assert abs(st["shares"] - 37800) < 1e-6            # 份额×2
     assert abs(st["cost_amount"] - 31891.79) < 0.01     # 成本不动
     assert st["realized_pnl"] == 0                      # 拆分不产生盈亏
-    assert abs(st["lots"][0]["unit_price"] - 1.6873 / 2) < 1e-6
+    # 基金成本按实际支出计算，成交净值的显示精度不应改变成本。
+    assert abs(st["lots"][0]["unit_price"] - 31891.79 / 37800) < 1e-6
 
 
-def test_split_then_partial_redeem_fifo_uses_scaled_unit():
+def test_split_then_partial_redeem_uses_scaled_average_cost():
     acts = [
         _act(1, "BUY", 10000, 2500, 4.0, "2026-05-10"),
         _act(2, "SPLIT", 0, 2.0, None, "2026-07-06"),
@@ -66,9 +67,9 @@ def test_cycle_realized_dilutes_cost_same_day_rebuy():
         _act(3, "ADD", 4224.73, 3500, 1.2071, "2026-07-06"),    # 同日买回 → 周期延续
     ]
     st = compute_external_state(acts, "FUND")
-    assert abs(st["cycle_realized"] - (-656.07)) < 0.01   # FIFO按lot单价配成本
-    assert abs(st["diluted_cost"] - (4224.73 + 656.07)) < 0.01   # 亏损抬高摊薄成本
-    assert abs(st["realized_pnl"] - (-656.07)) < 0.01            # 总已实现口径不变
+    assert abs(st["cycle_realized"] - (-656.42)) < 0.01   # 实际赎回金额减去实际投入
+    assert abs(st["diluted_cost"] - (4224.73 + 656.42)) < 0.01   # 独立摊薄指标仍保留
+    assert abs(st["realized_pnl"] - (-656.42)) < 0.01
 
 
 def test_cycle_realized_resets_after_overnight_flat():
@@ -81,7 +82,7 @@ def test_cycle_realized_resets_after_overnight_flat():
     st = compute_external_state(acts, "FUND")
     assert st["cycle_realized"] == 0
     assert abs(st["diluted_cost"] - 6616.13) < 0.01              # 新周期摊薄 = lot 成本
-    assert abs(st["realized_pnl"] - (-170.24)) < 0.01
+    assert abs(st["realized_pnl"] - (-170.2)) < 0.01
 
 
 def test_etf_xray_theme_classify_and_match():

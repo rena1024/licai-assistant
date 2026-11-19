@@ -159,6 +159,14 @@ async def _maybe_sync_etf_split(asset: dict) -> bool:
     return True
 
 
+def _holding_cost(asset: dict) -> float:
+    """基金使用剩余平均成本；其他资产沿用原有成本口径。"""
+    cost = asset.get("cost_amount")
+    if asset.get("asset_type") != "FUND" and asset.get("diluted_cost") is not None:
+        cost = asset["diluted_cost"]
+    return float(cost or 0)
+
+
 async def _enrich(asset: dict) -> dict:
     """Add quote, current_value, pnl for one asset.
 
@@ -174,6 +182,8 @@ async def _enrich(asset: dict) -> dict:
     realized_pnl = 0.0
     pending_count = 0
     total_released = 0.0
+    if t == "FUND":
+        out["holding_dividend"] = 0.0
     if t != "BOT":
         try:
             actions = await list_external_actions(asset["id"], user_id=require_user_id())
@@ -195,6 +205,8 @@ async def _enrich(asset: dict) -> dict:
                     out["shares"] = ledger_state["shares"]
                     out["cycle_realized"] = ledger_state.get("cycle_realized") or 0.0
                     out["diluted_cost"] = ledger_state.get("diluted_cost")
+                    if t == "FUND":
+                        out["holding_dividend"] = ledger_state["holding_dividend"]
                 realized_pnl = ledger_state["realized_pnl"]
                 total_released = float(ledger_state.get("total_release_proceeds") or 0)
         except Exception as e:
@@ -393,16 +405,17 @@ async def _enrich(asset: dict) -> dict:
         out["pnl_pct"] = None
         return out
 
-    cost = float(out.get("cost_amount") or 0)
-    # PnL 基准: FUND/CRYPTO 用摊薄成本(券商口径) —— 当前持仓周期内的减仓盈亏摊进
-    # 剩余成本(卖亏了成本抬高), 隔夜清仓才重置; 与 A股 的综合成本法同一约定,
-    # 行内盈亏和券商 App 显示一致。其余资产仍用剩余 lot 成本。
-    if t in ("FUND", "CRYPTO") and out.get("diluted_cost") is not None:
-        cost = float(out["diluted_cost"])
+    # 基金持有收益包含归属于剩余份额的现金分红，成本仍是含申购费的移动平均成本。
+    cost = _holding_cost(out)
     # PnL 只看已确认 lot vs 已确认成本: 从 current_value 里把 pending 剔出去再减 cost.
     # current_value 仍含 pending (资产总额视角); pnl 用 (mv - pending) - cost 算.
     pending_for_pnl = float(out.get("pending_amount") or 0) if t in ("FUND", "CRYPTO") else 0
     pnl = ((current_value or 0) - pending_for_pnl) - cost if current_value is not None else None
+    if t == "FUND":
+        # 分项按金额精度核对平台，避免先算未舍入差额再加分红产生一分钱偏差。
+        cost = round(cost, 2)
+        if current_value is not None:
+            pnl = round(current_value - pending_for_pnl, 2) - cost + out["holding_dividend"]
     pnl_pct = (pnl / cost * 100) if pnl is not None and cost > 0 else None
 
     out["quote"] = quote
@@ -431,8 +444,8 @@ async def list_assets():
     # NOTE: total_pnl 必须等于 Σ a["pnl"] (= 每个资产 (current_value - pending) - cost).
     # 不能简单 total_value - total_cost — current_value 含 pending 但 cost 不含,
     # 会让顶部 SummaryStrip 比持仓表多算 Σ pending_amount.
-    # cost 口径与行内 pnl 基准一致: FUND/CRYPTO 用摊薄成本(diluted_cost), 其余剩余lot成本
-    total_cost = sum(float((a.get("diluted_cost") if a.get("diluted_cost") is not None else a.get("cost_amount")) or 0) for a in enriched)
+    # 汇总和行内浮动使用同一成本口径。
+    total_cost = sum(_holding_cost(a) for a in enriched)
     total_value = sum((a.get("current_value") or 0) for a in enriched)
     total_pnl = sum((a.get("pnl") or 0) for a in enriched)
 
@@ -442,7 +455,7 @@ async def list_assets():
         t = a["asset_type"]
         if t not in by_type:
             by_type[t] = {"cost": 0.0, "value": 0.0, "pnl": 0.0, "count": 0}
-        by_type[t]["cost"] += float((a.get("diluted_cost") if a.get("diluted_cost") is not None else a.get("cost_amount")) or 0)
+        by_type[t]["cost"] += _holding_cost(a)
         by_type[t]["value"] += a.get("current_value") or 0
         by_type[t]["pnl"] += a.get("pnl") or 0
         by_type[t]["count"] += 1
@@ -488,8 +501,9 @@ async def assets_realized():
             "code": a.get("code") or "",
             "name": a.get("name") or "",
             "realized_pnl": rp,
-            # 已平仓周期的已实现: 当前周期部分已摊进行内摊薄成本, 总账只补这块(防重复计)
-            "closed_realized": round(rp - float(state.get("cycle_realized") or 0), 2),
+            # 基金持有收益已含剩余份额分红，总账补入时须扣除，避免重复计算。
+            "closed_realized": round(rp - float(state.get("holding_dividend" if t == "FUND" else "cycle_realized") or 0), 2),
+            "holding_dividend": float(state.get("holding_dividend") or 0),
             "income_realized": float(state.get("income_realized") or 0),
             "still_holding": (state.get("cost_amount") or 0) > 0,
         })

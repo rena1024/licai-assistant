@@ -1,7 +1,8 @@
-"""外部资产 FIFO 记账 — 给基金/加密/理财/现金算实现盈亏 + 当前持有成本.
+"""外部资产记账 — 给基金/加密/理财/现金算实现盈亏 + 当前持有成本.
 
 设计:
-- FUND/CRYPTO: 按 shares 配对 (BUY/ADD 加 lot, REDEEM 消耗 lot)
+- FUND: 移动加权平均结转成本，份额批次仍按先入先出消耗以保留持有日期
+- CRYPTO: 按 shares 先进先出配对 (BUY/ADD 加 lot, REDEEM 消耗 lot)
 - WEALTH/CASH: 按 principal CNY 配对 (DEPOSIT 加 lot, WITHDRAW 消耗 lot, INTEREST/DIVIDEND 直接进 realized)
 - BOT: 不走 ledger (OKX 端管理)
 
@@ -40,6 +41,7 @@ def compute_external_state(
       cost_amount: 当前持仓的累计成本 (CNY, 综合本金法)
       shares: 当前份额 (仅 FUND/CRYPTO 有意义)
       realized_pnl: 截至今天的累计已实现盈亏 (含 INTEREST/DIVIDEND)
+      holding_dividend: 归属于当前基金剩余份额的现金分红，已包含在 realized_pnl 中
       lots: 剩余 lots
       total_acquired_cost: 历史总投入成本 (含已赎回部分, 用于审计)
       total_release_proceeds: 历史总赎回 (审计)
@@ -56,12 +58,14 @@ def compute_external_state(
             "total_acquired_cost": 0.0,
             "total_release_proceeds": 0.0,
             "income_realized": 0.0,
+            "holding_dividend": 0.0,
         }
 
     # 只算 confirmed 状态的 action; pending (OTC 基金 T+1 待确认) 不进 ledger
     confirmed = [a for a in actions if (a.get("status") or "confirmed") == "confirmed"]
     sorted_actions = sorted(confirmed, key=lambda a: (
         _parse_date(a.get("trade_date") or a.get("created_at")),
+        a.get("trade_time") or "00:00",
         a.get("id") or 0,
     ))
 
@@ -71,6 +75,7 @@ def compute_external_state(
     lots: list[dict] = []
     realized_pnl = 0.0
     income_realized = 0.0
+    holding_dividend = 0.0
     total_acquired_cost = 0.0
     total_release_proceeds = 0.0
     # 当前持仓周期内的已实现(券商摊薄成本口径): 减仓盈亏摊进剩余成本;
@@ -98,7 +103,11 @@ def compute_external_state(
                 if lot_shares is None or lot_shares <= 0:
                     # 没法定 lot, 跳过 (用户后面应该会补 shares)
                     continue
-                lot_unit = unit_price if unit_price else (amount / lot_shares if lot_shares > 0 else 0)
+                # 含申购费的总支出必须完整分摊到份额成本；流水中的 unit_price 仍保留净值。
+                if asset_type == "FUND" or float(a.get("fee") or 0) > 0:
+                    lot_unit = amount / lot_shares
+                else:
+                    lot_unit = unit_price if unit_price else (amount / lot_shares if lot_shares > 0 else 0)
                 lots.append({"amount": amount, "shares": lot_shares, "unit_price": lot_unit, "date": ad})
             else:
                 # principal-based
@@ -115,7 +124,18 @@ def compute_external_state(
                 )
                 if consume_shares is None or consume_shares <= 0:
                     continue
-                # FIFO 消耗 lot
+                if asset_type == "FUND" and lots:
+                    # 金额是实际总支出，不能用四舍五入后的净值反推成本。
+                    # 赎回前将剩余成本按份额均摊，各批日期及份额不变；随后只按
+                    # FIFO 消耗批次份额，结转成本自然等于赎回份额 × 当前平均成本。
+                    held_shares = sum(lot["shares"] for lot in lots)
+                    # 历史分红按赎回前的份额比例移出持有收益，仍保留在已实现总账。
+                    holding_dividend *= max(0.0, 1 - consume_shares / held_shares)
+                    average_cost = sum(lot["amount"] for lot in lots) / held_shares
+                    for lot in lots:
+                        lot["unit_price"] = average_cost
+                        lot["amount"] = lot["shares"] * average_cost
+                # 按先入先出消耗份额批次；基金成本已单独按平均成本分摊。
                 remaining = consume_shares
                 consumed_cost = 0.0
                 while remaining > 1e-9 and lots:
@@ -167,13 +187,15 @@ def compute_external_state(
             # INTEREST / DIVIDEND 直接进 realized, 不动 lot
             realized_pnl += amount
             income_realized += amount
+            if asset_type == "FUND" and t == "DIVIDEND" and lots:
+                holding_dividend += amount
             if is_share_based:
                 cycle_realized += amount        # 现金分红降低摊薄成本
 
         elif t == "SPLIT" and is_share_based:
             # 份额拆分/折算 (1份→F份): factor 存在 shares 字段。当时全部 lot 份额×F、
             # 单价÷F, 成本一分不动 —— 拆分不是交易, 不产生任何盈亏; 逐 lot 缩放保证
-            # 之后的部分赎回按拆分后单价 FIFO 配对, 已实现盈亏口径不被拆分扭曲。
+            # 之后赎回使用拆分后的份额和成本，拆分不改变总成本。
             f = float(shares) if shares else 0.0
             if f > 0 and abs(f - 1) > 1e-9:
                 for lot in lots:
@@ -186,6 +208,7 @@ def compute_external_state(
     shares_total = sum(l["shares"] for l in lots if l.get("shares") is not None) if is_share_based else 0.0
     if not lots:
         cycle_realized = 0.0                    # 当前没持仓就没有"周期内"概念
+        holding_dividend = 0.0
 
     return {
         "cost_amount": round(cost_amount, 4),
@@ -195,6 +218,7 @@ def compute_external_state(
         "shares": round(shares_total, 6) if is_share_based else 0.0,
         "realized_pnl": round(realized_pnl, 2),
         "income_realized": round(income_realized, 2),
+        "holding_dividend": round(holding_dividend, 2),
         "lots": [
             {
                 "amount": round(l["amount"], 4),

@@ -98,13 +98,13 @@ export function AssetActionsModal({ asset, onClose, onChanged }) {
           <div className="text-center text-text-dim text-[12px] py-4">暂无流水</div>
         ) : (
           <div className="border border-border-subtle rounded-md overflow-hidden">
-            <div className="grid grid-cols-[80px_60px_1fr_1fr_1fr_auto] gap-2 px-2 py-1.5 text-[10px] text-text-dim bg-surface-3 border-b border-border-subtle font-medium tracking-wider">
+            <div className={`grid ${ACTION_GRID_COLUMNS} gap-2 px-2 py-1.5 text-[10px] text-text-dim bg-surface-3 border-b border-border-subtle font-medium tracking-wider`}>
               <div>日期</div>
               <div>类型</div>
               <div className="text-right">金额</div>
               <div className="text-right">份额</div>
               <div className="text-right">单价</div>
-              <div className="w-[140px]"></div>
+              <div className="text-right">操作</div>
             </div>
             {[...actions]
               .sort((x, y) => {

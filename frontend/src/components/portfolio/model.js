@@ -40,8 +40,8 @@ export function normalizeHolding(h) {
 export function normalizeAsset(a) {
   const key = ASSET_TYPE_TO_KEY[a.asset_type] || 'R'
   const mv = a.current_value
-  // 基金/加密用摊薄成本(周期内减仓盈亏摊进成本, 与券商'成本价'同口径), 行内盈亏才和券商一致
-  const cost = a.diluted_cost ?? a.cost_amount
+  // 基金用剩余平均成本，分红和赎回收益单列；其他类型沿用原有口径。
+  const cost = a.asset_type === 'FUND' ? a.cost_amount : (a.diluted_cost ?? a.cost_amount)
   const q = a.quote
   // BOT 的 today 用 OKX floatProfit (浮动盈亏，未实现) 当代理 — 比 lifetime pnl 更接近"今日"
   let today = null

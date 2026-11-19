@@ -28,8 +28,8 @@ export function SummaryStrip({ agg, aShareClosed, realized, todayPnl }) {
         <div className="leading-relaxed">
           <div className="text-text-bright font-semibold mb-1">总盈亏拆分</div>
           <div className="font-mono text-[11px] space-y-0.5">
-            <div>浮动盈亏 <span className={priceColor(agg.totalPnl)}>{agg.totalPnl >= 0 ? '+' : ''}¥{fmtMoney(agg.totalPnl)}</span></div>
-            <div>已实现盈亏 <span className={priceColor(realizedTotal)}>{realizedTotal >= 0 ? '+' : ''}¥{fmtMoney(realizedTotal)}</span></div>
+            <div>持有收益 <span className={priceColor(agg.totalPnl)}>{agg.totalPnl >= 0 ? '+' : ''}¥{fmtMoney(agg.totalPnl)}</span></div>
+            <div>持有收益外的已实现 <span className={priceColor(realizedTotal)}>{realizedTotal >= 0 ? '+' : ''}¥{fmtMoney(realizedTotal)}</span></div>
             {realized?.stock !== 0 && (
               <div className="text-text-dim pl-2">  · 股票 <span className={priceColor(realized.stock)}>{realized.stock >= 0 ? '+' : ''}¥{fmtMoney(realized.stock)}</span></div>
             )}
