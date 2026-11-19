@@ -1,6 +1,7 @@
 """Market data REST endpoints."""
 from __future__ import annotations
 from services.user_context import require_user_id
+from services.ai_jobs import shared_ai_job
 import asyncio
 import json as _json
 import time as _time
@@ -748,6 +749,7 @@ async def market_unbroken(force: bool = False):
 
 
 @router.get("/structure")
+@shared_ai_job(daily=True)
 async def market_structure(force: bool = False):
     """结构观察池(蓄势+强势合并, 按行业分组): 哪个行业在孕育(蓄势), 哪个在推进(强势)。"""
     import asyncio as _a
@@ -1169,10 +1171,11 @@ _senti_ai_cache: dict = {}
 
 
 @router.get("/sentiment-ai")
+@shared_ai_job(daily=True)
 async def sentiment_ai(force: bool = False):
     """基于情绪温度计数据的 AI 客观解读: 当前处在情绪周期哪个位置(冰点/修复/发酵/高潮/退潮),
     接力赚钱效应、连板高度、炸板率、量能、板块主线说明什么, 跟持仓板块的关系。
-    硬规则: 只做客观情绪描述, 严禁任何买卖/加减仓/抄底/止盈建议。20min 缓存。"""
+    硬规则: 只做客观情绪描述, 严禁任何买卖/加减仓/抄底/止盈建议。每日首次访问生成，force 手动更新。"""
     import asyncio
     s = await market_sentiment()
     if not s or not s.get("n_zt"):

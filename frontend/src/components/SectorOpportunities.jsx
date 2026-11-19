@@ -1,6 +1,6 @@
-import { apiFetch } from '../hooks/sessionRuntime'
 import { useState, useEffect, useCallback, useMemo } from 'react'
 import { fetchJSON } from '../hooks/useApi'
+import useLLMStatus, { llmRequestHeaders } from '../hooks/useLLMStatus'
 import Tooltip from './Tooltip'
 import SectorKlineModal from './SectorKlineModal'
 import SkeletonCard from './Skeleton'
@@ -55,18 +55,20 @@ export default function SectorOpportunities() {
   const [openSector, setOpenSector] = useState(null)
   const [whyOpen, setWhyOpen] = useState(null)
   const [whyData, setWhyData] = useState({})
-  const toggleWhy = (r) => {
-    if (whyOpen === r.name) { setWhyOpen(null); return }
+  const currentWhy = whyData[`${market}:${whyOpen}`]
+  const llm = useLLMStatus(!!currentWhy?.loading, { requestId: currentWhy?.requestId })
+  const toggleWhy = (r, retry = false) => {
+    if (!retry && whyOpen === r.name) { setWhyOpen(null); return }
     setWhyOpen(r.name)
     const k = `${market}:${r.name}`
-    if (whyData[k]) return
-    setWhyData(d => ({ ...d, [k]: { loading: true } }))
-    apiFetch('/api/sector/why', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
+    if (whyData[k]?.loading || (!retry && whyData[k])) return
+    const requestId = llmRequestHeaders(`sector-why:${k}`)['X-LLM-Activity']
+    setWhyData(d => ({ ...d, [k]: { loading: true, requestId } }))
+    fetchJSON('/api/sector/why', {
+      method: 'POST', headers: { ...llm.headers, 'X-LLM-Activity': requestId },
       body: JSON.stringify({ market, name: r.name, change_1d: r.change_1d, change_5d: r.change_5d, held: !!r.held, leader: r.leader || null }),
-    }).then(res => res.json())
-      .then(j => setWhyData(d => ({ ...d, [k]: j })))
-      .catch(() => setWhyData(d => ({ ...d, [k]: { error: '解读暂不可用' } })))
+    }).then(j => setWhyData(d => ({ ...d, [k]: j })))
+      .catch(error => setWhyData(d => ({ ...d, [k]: { error: error.message || '解读暂不可用' } })))
   }
 
   const cfg = MARKETS[market] || MARKETS.A
@@ -310,9 +312,15 @@ export default function SectorOpportunities() {
                 <div className="px-3 md:px-5 pb-2.5 -mt-1">
                   <div className="rounded-lg border border-accent/20 bg-accent/5 p-2.5 space-y-1">
                     {!w || w.loading ? (
-                      <div className="text-[11px] text-text-dim animate-pulse">解读生成中…</div>
+                      <div role="status" className="text-[11px] text-accent break-words">{llm.label}</div>
                     ) : w.error ? (
-                      <div className="text-[11px] text-text-dim">解读暂不可用</div>
+                      <div className="flex items-center justify-between gap-2">
+                        <div role="alert" className="text-[11px] text-text-dim">{w.error}</div>
+                        <button onClick={() => toggleWhy(r, true)}
+                          className="shrink-0 text-[11px] px-2 py-0.5 rounded border border-border-med text-text-dim hover:text-accent hover:border-accent cursor-pointer">
+                          重试
+                        </button>
+                      </div>
                     ) : (
                       <>
                         {w.why && <div className="text-[11.5px] text-text"><span className="text-accent">为什么动 · </span>{w.why}</div>}

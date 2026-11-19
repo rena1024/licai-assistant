@@ -1,6 +1,7 @@
 """Portfolio news aggregation. 用 akshare 拉持仓个股的新闻 + 公告."""
 from __future__ import annotations
 from services.user_context import require_user_id
+from services.ai_jobs import shared_ai_job
 import asyncio
 import hashlib
 import ipaddress
@@ -538,9 +539,10 @@ _DIGEST_TTL = 1800  # LLM 摘要 30 分钟缓存 (调用贵 + 慢)
 
 
 @router.get("/digest")
+@shared_ai_job(daily=True)
 async def news_digest(force: bool = False, max_items: int = 80):
     """LLM 摘要: 把市场要闻 + 持仓相关新闻喂给 Claude, 生成结构化要点.
-    30min 缓存; force=true 强制重算.
+    北京时间每天首次访问生成，force=true 手动重新生成。
     """
     cache_key = (require_user_id(), "news_digest")
     if not force:
@@ -659,6 +661,7 @@ def _foreign_asof(market: str, q: dict) -> str:
 
 
 @router.get("/daily-review")
+@shared_ai_job(daily=True)
 async def daily_review(force: bool = False):
     """收盘复盘日报: A 股持仓今日涨跌 + 板块异动 + 全球快讯 → LLM 归因复盘。
     输出 {summary, holdings[], sectors[], global[], tomorrow[]}。不给买卖建议。"""
@@ -1034,6 +1037,7 @@ async def _all_holdings_desc() -> str:
 
 
 @router.post("/interpret")
+@shared_ai_job
 async def interpret_news(data: InterpretIn):
     content = (data.content or "").strip()
     body_excerpt = ""

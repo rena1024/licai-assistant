@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
-import { fetchJSON } from '../hooks/useApi'
+import { fetchJSON, fetchAIJSON } from '../hooks/useApi'
+import useLLMStatus from '../hooks/useLLMStatus'
 import SkeletonCard from './Skeleton'
 
 // 收盘 AI 复盘日报: 持仓今日归因 + 板块 + 全球大事 + 明日关注
@@ -12,6 +13,15 @@ const pctColor = (s) => {
 // 大盘全景: 今天全市场客观定格(情绪广度 + 主线 + 机构龙虎榜)。客观呈现,非买卖信号。
 const hpct = (v) => v == null ? '--' : `${v > 0 ? '+' : ''}${v.toFixed(2)}%`
 const hcls = (v) => v == null ? 'text-text-muted' : v > 0 ? 'text-bear' : v < 0 ? 'text-bull' : 'text-text-dim'
+
+function reviewPoints(items) {
+  if (!Array.isArray(items)) return []
+  // 模型及旧缓存可能返回 {title, note}，展示前提取文字，避免对象进入 React 子节点。
+  return items.map(item => {
+    if (typeof item === 'string') return item
+    return [item?.title, item?.note].filter(value => typeof value === 'string').join(' · ')
+  }).filter(Boolean)
+}
 
 // 长假前后: 同一假期历年的指数表现(只在节前 7 / 节后 5 个交易日内出现)
 function HolidayContext() {
@@ -133,21 +143,26 @@ export default function DailyReview({ bare = false }) {
   const [data, setData] = useState(null)
   const [loading, setLoading] = useState(false)
   const [err, setErr] = useState('')
+  const llm = useLLMStatus(loading, { requestKey: '/api/news/daily-review' })
 
   const load = useCallback(async (force = false) => {
     setLoading(true); setErr('')
     try {
-      setData(await fetchJSON(`/api/news/daily-review${force ? '?force=true' : ''}`))
-    } catch {
-      setErr('复盘生成失败，稍后重试')
+      const result = await fetchAIJSON(`/api/news/daily-review${force ? '?force=true' : ''}`, { headers: llm.headers })
+      if (result.error) throw new Error(result.error)
+      setData(result)
+    } catch (e) {
+      setErr(e.message || '复盘生成失败，请点击“重新生成”重试')
     } finally {
       setLoading(false)
     }
-  }, [])
+  }, [llm.headers])
 
   useEffect(() => { load(false) }, [load])
 
-  const has = data && (data.summary || (data.holdings || []).length || (data.global || []).length)
+  const globalPoints = reviewPoints(data?.global)
+  const tomorrowPoints = reviewPoints(data?.tomorrow)
+  const has = data && (data.summary || (data.holdings || []).length || globalPoints.length || tomorrowPoints.length)
 
   return (
     <div className={bare ? '' : 'bg-surface-2 border border-border rounded-xl p-4 md:p-5'}>
@@ -159,11 +174,12 @@ export default function DailyReview({ bare = false }) {
         </div>
         <button onClick={() => load(true)} disabled={loading}
           className="text-[11px] px-2.5 py-1 rounded-lg border border-border text-text-dim hover:text-text hover:border-border-med cursor-pointer disabled:opacity-40">
-          {loading ? '生成中…' : '↻ 重新复盘'}
+          {loading ? '生成中…' : '↻ 重新生成'}
         </button>
       </div>
 
       {/* 大盘全景: 今天全市场发生了什么(独立取数, 不随 AI 复盘的成败) */}
+      {loading && <p role="status" className="text-xs text-text-dim mb-2">{llm.label}</p>}
       <div className="mb-3.5"><HolidayContext /><MarketPanorama /></div>
 
       {loading && !data && <SkeletonCard bare rows={5} label="AI 复盘生成中" />}
@@ -205,11 +221,11 @@ export default function DailyReview({ bare = false }) {
             </div>
           )}
 
-          {(data.global || []).length > 0 && (
+          {globalPoints.length > 0 && (
             <div>
               <div className="text-[11px] text-text-muted mb-1.5 tracking-wider">全球大事</div>
               <ul className="space-y-1">
-                {data.global.map((g, i) => (
+                {globalPoints.map((g, i) => (
                   <li key={i} className="text-[12px] text-text-dim flex gap-1.5">
                     <span className="text-text-muted shrink-0">·</span><span>{g}</span>
                   </li>
@@ -218,11 +234,11 @@ export default function DailyReview({ bare = false }) {
             </div>
           )}
 
-          {(data.tomorrow || []).length > 0 && (
+          {tomorrowPoints.length > 0 && (
             <div>
               <div className="text-[11px] text-text-muted mb-1.5 tracking-wider">明日关注</div>
               <ul className="space-y-1">
-                {data.tomorrow.map((t, i) => (
+                {tomorrowPoints.map((t, i) => (
                   <li key={i} className="text-[12px] text-accent/90 flex gap-1.5">
                     <span className="shrink-0">→</span><span>{t}</span>
                   </li>

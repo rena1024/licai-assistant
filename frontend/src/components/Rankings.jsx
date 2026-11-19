@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
-import { fetchJSON, prefetchJSON } from '../hooks/useApi'
+import { fetchJSON, fetchAIJSON, prefetchJSON } from '../hooks/useApi'
+import useLLMStatus from '../hooks/useLLMStatus'
 import RotationBoard from './RotationBoard'
 import GroupPicker from './rankings/GroupPicker'
 import StockPanel from './rankings/StockPanel'
@@ -69,6 +70,7 @@ export default function Rankings() {
   const [dragCode, setDragCode] = useState('')            // 正在拖动的自选代码
   const [grpMenu, setGrpMenu] = useState('')              // 展开「移到分组」菜单的代码
   const [loading, setLoading] = useState(true)
+  const llm = useLLMStatus(loading && tab === 'structure', { requestKey: '/api/market/structure' })
   const [err, setErr] = useState(false)
   const [selected, setSelected] = useState(null)
   const listRef = useRef([])
@@ -87,10 +89,10 @@ export default function Rankings() {
     if (r) { deepSelRef.current = ''; setSelected(r) }
   })
 
-  const load = () => {
+  const load = (force = false) => {
     setLoading(true); setErr(false)
     const req = tab === 'structure'
-      ? fetchJSON('/api/market/structure').then(d => { if (d.error) setErr(true); else setStructure(d) })
+      ? fetchAIJSON(`/api/market/structure${force === true ? '?force=true' : ''}`, { headers: llm.headers }).then(d => { if (d.error) setErr(true); else setStructure(d) })
       : tab === 'inst'
       ? fetchJSON('/api/market/inst-flow?top=40').then(d => { if (d.error) setErr(true); else setInst(d) })
       : tab === 'earnings'
@@ -333,7 +335,8 @@ export default function Rankings() {
   // 涨幅/成交额也要在列: 它们共用 /api/market/rankings 那一份 data, 而挂载时的 load()
   // 只拉了 deep-link 落地的那个页签 —— 漏掉这两个的话, 从别的页签深链进来再点「涨幅」
   // 会一直是空列表, 得手按一次「刷新」才出来。所以条件是 data 没拿到, 而非某个专属 state。
-  useEffect(() => { if ((tab === 'structure' && !structure) || (tab === 'inst' && !inst) || (tab === 'earnings' && !earnings) || (tab === 'lhb' && !lhbDaily) || (tab === 'watch' && !watch) || (tab === 'hotrank' && !hotRank) || ((tab === 'gainers' || tab === 'by_amount') && !data)) load() }, [tab])   // eslint-disable-line react-hooks/exhaustive-deps
+  // 结构页每次进入都校验自然日；同日请求由 fetchAIJSON 复用。
+  useEffect(() => { if (tab === 'structure' || (tab === 'inst' && !inst) || (tab === 'earnings' && !earnings) || (tab === 'lhb' && !lhbDaily) || (tab === 'watch' && !watch) || (tab === 'hotrank' && !hotRank) || ((tab === 'gainers' || tab === 'by_amount') && !data)) load() }, [tab])   // eslint-disable-line react-hooks/exhaustive-deps
   // 异动页: 进页签/换组立即拉 + 60s 静默轮询(服务端45s缓存, 盘中事件流持续滚动, 不闪加载态)
   useEffect(() => {
     if (tab !== 'changes') return
@@ -525,7 +528,11 @@ export default function Rankings() {
             兜底的 data?.as_of —— 那是 /api/market/rankings 的取数时间, 跟这张榜没关系,
             印上去等于给用户一个来自别的数据集的假日期。 */}
         <span className="text-[10px] text-text-muted whitespace-nowrap shrink-0">{(tab === 'structure' ? structure?.as_of : tab === 'lhb' ? lhbDaily?.date : tab === 'hotrank' ? '' : data?.as_of)?.slice(5, 11) || ''}</span>
-        <button onClick={load} title="刷新" className="text-[10.5px] px-1.5 py-0.5 rounded border border-border text-text-dim hover:text-text shrink-0">刷新</button>
+        <button onClick={() => load(tab === 'structure')} disabled={tab === 'structure' && loading}
+          title={tab === 'structure' ? '重新生成' : '刷新'}
+          className="text-[10.5px] px-1.5 py-0.5 rounded border border-border text-text-dim hover:text-text shrink-0 disabled:opacity-40">
+          {tab === 'structure' ? (loading ? '生成中…' : '重新生成') : '刷新'}
+        </button>
       </div>
 
       <div className="flex flex-col lg:flex-row flex-1 min-h-0">
@@ -657,8 +664,8 @@ export default function Rankings() {
                 : `榜单 top100 里暂无${board}标的`}
             </div>
           )}
-          {loading && <div className="text-center py-8 text-text-dim text-[12px]">{tab === 'structure' ? '全市场扫描中…（首扫约1分钟, 之后10分钟缓存秒开）' : '加载榜单…'}</div>}
-          {err && <div className="text-center py-8 text-text-dim text-[12px]">榜单源暂不可达（东财抖动），<button onClick={load} className="text-accent">重试</button></div>}
+          {loading && <div className="text-center py-8 text-text-dim text-[12px]">{tab === 'structure' ? '全市场扫描中…（首扫约1分钟, 之后10分钟缓存秒开）' : '加载榜单…'}{tab === 'structure' && <p role="status" className="mt-1 break-words">{llm.label}</p>}</div>}
+          {err && <div className="text-center py-8 text-text-dim text-[12px]">榜单源暂不可达（东财抖动），<button onClick={() => load(tab === 'structure')} className="text-accent">重试</button></div>}
           {!loading && !err && list.map((r, i) => {
             if (r._wh) {
               return (

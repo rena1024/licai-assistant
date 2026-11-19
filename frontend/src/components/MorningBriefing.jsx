@@ -1,5 +1,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { fetchJSON } from '../hooks/useApi'
+import useLLMStatus from '../hooks/useLLMStatus'
+import { onSessionReset } from '../hooks/sessionRuntime'
 import SkeletonCard from './Skeleton'
 
 // 信息倾向(描述, 非操作指令)。A股 红=暖/绿=冷。
@@ -15,45 +17,80 @@ const CONFIDENCE_META = {
   low:  { label: '低', color: '#a8a39a' },
 }
 
+// 简报由按钮启动；切回来时跟随已有刷新，不再次触发生成。
+let pendingRefresh = null
+onSessionReset(() => { pendingRefresh = null })
+
+function refreshMessage(result) {
+  if (result.count === 0 || result.briefings?.length === 0) {
+    return '当前没有可生成简报的有效持仓，请先添加股票或场内 ETF 持仓后重试。'
+  }
+  return '早盘简报已更新。'
+}
+
 export default function MorningBriefing() {
   const [data, setData] = useState(null)
   const [loading, setLoading] = useState(false)
   const [refreshing, setRefreshing] = useState(false)
   const [expanded, setExpanded] = useState({})
+  const [error, setError] = useState('')
+  const [notice, setNotice] = useState('')
+  const llm = useLLMStatus(refreshing, { requestKey: '/api/briefing/refresh' })
 
   const load = useCallback(async () => {
     setLoading(true)
     try { setData(await fetchJSON('/api/briefing')) }
-    catch (e) { console.error(e) }
     finally { setLoading(false) }
   }, [])
 
-  useEffect(() => { load() }, [load])
+  useEffect(() => {
+    let current = true
+    load().catch(e => { if (current) setError(e.message) })
+    if (pendingRefresh) {
+      setRefreshing(true)
+      pendingRefresh.then(result => {
+        if (current) { setNotice(refreshMessage(result)); return load() }
+      })
+        .catch(e => { if (current) setError(e.message) })
+        .finally(() => { if (current) setRefreshing(false) })
+    }
+    return () => { current = false }
+  }, [load])
 
   const refresh = async () => {
     if (refreshing) return
     setRefreshing(true)
+    setError(''); setNotice('')
+    const work = pendingRefresh || fetchJSON('/api/briefing/refresh', { method: 'POST', headers: llm.headers })
+    pendingRefresh = work
     try {
-      await fetchJSON('/api/briefing/refresh', { method: 'POST' })
+      const result = await work
       await load()
-    } catch (e) { console.error(e) }
-    finally { setRefreshing(false) }
+      setNotice(refreshMessage(result))
+    } catch (e) { setError(e.message) }
+    finally {
+      if (pendingRefresh === work) pendingRefresh = null
+      setRefreshing(false)
+    }
   }
 
-  if (loading && !data) return <SkeletonCard rows={3} label="早盘简报生成中" />
+  if (loading && !data) return <SkeletonCard rows={3} label="早盘简报加载中" />
   if (!data || !data.briefings || data.briefings.length === 0) {
     return (
       <section className="rounded-xl border border-border bg-surface/60 px-3 md:px-5 py-4">
         <div className="flex items-center justify-between">
           <div>
             <h3 className="text-[13px] font-semibold text-text-bright m-0">早盘简报</h3>
-            <p className="text-[11px] text-text-dim mt-1 mb-0">每日 9:00 自动生成 · 客观信息摘要 + 风险提示，不含操作建议</p>
+            <p className="text-[11px] text-text-dim mt-1 mb-0">每日 9:00 自动生成 · 根据本人股票及场内 ETF 持仓生成客观摘要与风险提示</p>
           </div>
           <button onClick={refresh} disabled={refreshing}
             className="px-3 py-1 rounded-md text-[11px] border border-accent/40 bg-accent/10 text-accent hover:bg-accent/20 transition-colors cursor-pointer disabled:opacity-50">
-            {refreshing ? '生成中...' : '立即生成'}
+            {refreshing ? '生成中…' : '立即生成'}
           </button>
         </div>
+        {refreshing && <p role="status" className="text-xs text-text-dim mt-2 break-words">{llm.label}</p>}
+        {error && <p role="alert" className="text-xs text-bear mt-2 break-words">{error}</p>}
+        {!error && notice && <p role="status" className="text-xs text-text-dim mt-2 break-words">{notice}</p>}
       </section>
     )
   }
@@ -72,10 +109,13 @@ export default function MorningBriefing() {
         </div>
         <button onClick={refresh} disabled={refreshing}
           className="px-2.5 py-[3px] rounded-md text-[11px] border border-border-med text-text-dim hover:text-text hover:border-accent transition-colors cursor-pointer disabled:opacity-50">
-          {refreshing ? '更新中...' : '重新生成'}
+          {refreshing ? '更新中…' : '重新生成'}
         </button>
       </div>
 
+      {refreshing && <p role="status" className="text-xs text-text-dim px-3 py-2 break-words">{llm.label}</p>}
+      {error && <p role="alert" className="text-xs text-bear px-3 py-2 break-words">{error}</p>}
+      {!error && notice && <p role="status" className="text-xs text-text-dim px-3 py-2 break-words">{notice}</p>}
       <div className="divide-y divide-border-subtle">
         {data.briefings.map(b => {
           const meta = SIGNAL_META[b.signal] || SIGNAL_META.中性

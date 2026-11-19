@@ -1,9 +1,10 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
-import { fetchJSON } from '../hooks/useApi'
+import { fetchJSON, fetchAIJSON } from '../hooks/useApi'
 import NewsDetailModal from './NewsDetailModal'
 import StockAskModal from './StockAskModal'
 import ImageZoom from './ImageZoom'
 import SkeletonCard from './Skeleton'
+import useLLMStatus from '../hooks/useLLMStatus'
 
 const KIND_LABEL = {
   news: { label: '新闻', color: '#85a0b4' },
@@ -50,26 +51,44 @@ const LEVEL_META = {
   watch:{ label: '关注', icon: '🟡', color: '#d4a05c' },
 }
 
+function digestErrorMessage(message) {
+  const reasons = {
+    provider_transport_error: '模型服务连接失败',
+    provider_http_error: '模型服务拒绝了请求',
+    cloud_held: '云端调用已暂停，请在设置中核对后确认开放',
+    no_eligible_model: '没有符合当前模式与能力要求的已选模型',
+    local_model_unverified: '无法验证本地模型，请检查 Ollama 服务与模型是否可用',
+    queue_timeout: '本地模型排队超时',
+    queue_full: '本地模型队列已满',
+  }
+  return String(message || '请求失败，请稍后重试').replace(/\b[a-z][a-z_]+\b/g, code => reasons[code] || code)
+}
+
 function DigestCard() {
   const [data, setData] = useState(null)
   const [loading, setLoading] = useState(false)
   const [err, setErr] = useState('')
+  const [notice, setNotice] = useState('')
+  const [regenerating, setRegenerating] = useState(false)
   const [collapsed, setCollapsed] = useState(false)
+  const llm = useLLMStatus(loading, { requestKey: '/api/news/digest' })
 
   const load = useCallback(async (force = false) => {
-    setLoading(true); setErr('')
+    setLoading(true); setRegenerating(force); setErr(''); setNotice('')
     try {
-      const d = await fetchJSON(`/api/news/digest${force ? '?force=true' : ''}`)
+      const d = await fetchAIJSON(`/api/news/digest${force ? '?force=true' : ''}`, { headers: llm.headers })
+      if (d.error) { setErr(digestErrorMessage(d.error)); return }
+      if (!d.summary && !d.highlights?.length) { setNotice('暂无可用资讯，未生成新摘要。'); return }
       setData(d)
-      if (d.error) setErr(d.error)
-    } catch (e) { setErr(e?.message || '加载失败') }
+      if (force) setNotice('AI 摘要已更新')
+    } catch (e) { setErr(digestErrorMessage(e?.message)) }
     finally { setLoading(false) }
-  }, [])
+  }, [llm.headers])
 
   useEffect(() => { load(false) }, [load])
 
   return (
-    <div className="border-b border-border bg-accent/5">
+    <div className="border-b border-border bg-accent/5" aria-busy={loading}>
       <div className="px-3 md:px-5 py-2.5 flex items-baseline justify-between gap-2 flex-wrap">
         <div className="flex items-baseline gap-2">
           <span className="text-[12px] text-text-bright font-semibold">🤖 LLM 摘要</span>
@@ -85,18 +104,23 @@ function DigestCard() {
             className="px-2 py-[2px] rounded text-[10.5px] cursor-pointer border border-border-med text-text-dim hover:text-accent">
             {collapsed ? '展开' : '收起'}
           </button>
-          <button onClick={() => load(true)} disabled={loading}
+          <button onClick={() => load(true)} disabled={loading} aria-label="重新生成 AI 摘要"
             className="px-2 py-[2px] rounded text-[10.5px] cursor-pointer border border-accent/40 text-accent hover:bg-accent/10 disabled:opacity-50">
-            {loading ? '...' : '↻ 重算'}
+            {loading ? '生成中…' : '↻ 重新生成'}
           </button>
         </div>
       </div>
+      {loading && <p role="status" className="px-3 md:px-5 pb-2 text-[11px] text-accent">{regenerating ? '正在重新生成 AI 摘要' : '正在生成 AI 摘要'} · {llm.label}</p>}
+      {err && <div role="alert" className="px-3 md:px-5 pb-3 text-[11px] text-bear leading-relaxed">
+        <p>摘要生成失败：{err}</p>
+        {(data?.summary || data?.highlights?.length > 0) && <p>已保留上次摘要，本次未更新。</p>}
+        <p>请检查“我的 AI 设置 → 资讯解读”的模型选择和服务状态；保存额度不会自动解除云端暂停。</p>
+      </div>}
+      {!loading && notice && <p role="status" className="px-3 md:px-5 pb-2 text-[11px] text-text-dim">{notice}</p>}
       {!collapsed && (
         <div className="px-3 md:px-5 pb-3">
           {loading && !data ? (
             <SkeletonCard bare rows={3} label="LLM 摘要生成中…（约 10-30 秒）" />
-          ) : err && !data?.highlights?.length ? (
-            <div className="text-[11px] text-bear">{err}</div>
           ) : data?.summary || data?.highlights?.length ? (
             <>
               {data.summary && (
@@ -126,9 +150,9 @@ function DigestCard() {
                 </div>
               )}
             </>
-          ) : (
+          ) : !err && !notice ? (
             <div className="text-[11px] text-text-dim">暂无摘要</div>
-          )}
+          ) : null}
         </div>
       )}
     </div>

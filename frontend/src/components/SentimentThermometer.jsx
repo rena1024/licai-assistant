@@ -1,5 +1,6 @@
-import { useState, useEffect } from 'react'
-import { fetchJSON } from '../hooks/useApi'
+import { useState, useEffect, useCallback } from 'react'
+import { fetchJSON, fetchAIJSON } from '../hooks/useApi'
+import useLLMStatus from '../hooks/useLLMStatus'
 import SkeletonCard from './Skeleton'
 import SentimentDetailModal from './SentimentDetailModal'
 
@@ -75,23 +76,44 @@ export default function SentimentThermometer() {
   const cachedAi = (() => { try { return JSON.parse(localStorage.getItem('sentimentAi') || 'null') } catch { return null } })()
   const [ai, setAi] = useState(cachedAi)
   const [aiLoading, setAiLoading] = useState(!cachedAi)
+  const [aiError, setAiError] = useState('')
+  const llm = useLLMStatus(aiLoading, { requestKey: '/api/market/sentiment-ai' })
 
-  const loadAi = (force = false) => {
-    setAiLoading(force || !cachedAi)
-    fetchJSON(`/api/market/sentiment-ai${force ? '?force=true' : ''}`)
-      .then(r => { setAi(r); try { if (r?.summary) localStorage.setItem('sentimentAi', JSON.stringify(r)) } catch {} })
-      .catch(() => {}).finally(() => setAiLoading(false))
-  }
+  const loadAi = useCallback(async (force = false) => {
+    setAiLoading(true); setAiError('')
+    try {
+      const r = await fetchAIJSON(`/api/market/sentiment-ai${force ? '?force=true' : ''}`, { headers: llm.headers })
+      if (r.error) throw new Error(r.error)
+      setAi(r)
+      try { if (r?.summary) localStorage.setItem('sentimentAi', JSON.stringify(r)) } catch {}
+    } catch (e) {
+      setAiError(e.message || '分析未完成，请点击“重新生成”重试')
+    } finally {
+      setAiLoading(false)
+    }
+  }, [llm.headers])
 
-  // 挂载时各拉一次。loadAi 是每次渲染新建的普通函数, 列进依赖会无限重取
-  // (而且 AI 情绪解读那一趟要 10-20 秒, 转起来代价很大)。
+  // 行情照常读取；AI 请求按北京时间自然日复用。
   useEffect(() => {
     fetchJSON('/api/market/sentiment').then(setD).catch(() => {}).finally(() => setLoading(false))
     loadAi()
-  }, [])
+  }, [loadAi])
 
-  if (loading) return <SkeletonCard rows={3} label="情绪加载中" />
-  if (!d || !d.n_zt) return null
+  const regenerateButton = (
+    <button onClick={() => loadAi(true)} disabled={aiLoading}
+      className="text-[11px] px-2 py-0.5 rounded border border-border text-text-dim hover:text-text disabled:opacity-40">
+      {aiLoading ? '生成中…' : '重新生成'}
+    </button>
+  )
+  if (loading) return <><SkeletonCard rows={3} label="情绪加载中" />{aiLoading && <p role="status" className="text-xs text-text-dim">{llm.label}</p>}</>
+  if (!d || !d.n_zt) return (
+    <div className="bg-surface-2 border border-border rounded-xl p-4 md:p-5">
+      <div className="flex items-center justify-between gap-2"><span>市场情绪温度计</span>{regenerateButton}</div>
+      <p className="text-xs text-text-dim">暂无可用市场情绪数据</p>
+      {aiLoading && <p role="status" className="text-xs text-text-dim">{llm.label}</p>}
+      {aiError && <p role="alert" className="text-xs text-bear">{aiError}</p>}
+    </div>
+  )
   const c = MOOD_COLOR[d.mood] || '#85a0b4'
   const v = d.volume || {}
 
@@ -102,10 +124,13 @@ export default function SentimentThermometer() {
           <h3 className="text-[14px] font-semibold text-text-bright m-0">市场情绪温度计</h3>
           <span className="text-[10.5px] text-text-muted">涨停/连板/量能</span>
         </div>
-        <button onClick={() => setShowDetail(true)}
+        <div className="flex items-center gap-2">
+          {regenerateButton}
+          <button onClick={() => setShowDetail(true)}
           className="text-[11px] px-2.5 py-1 rounded border border-accent/40 text-accent hover:bg-accent/10">
           看具体股票 →
         </button>
+        </div>
       </div>
 
       {/* 情绪定性 */}
@@ -162,15 +187,12 @@ export default function SentimentThermometer() {
       })()}
 
       {/* AI 情绪解读 */}
-      {aiLoading && !ai?.summary && <div className="text-[11.5px] text-text-dim mb-3">AI 分析市场情绪中…<span className="text-text-muted">(Opus 推理约 10–20 秒)</span></div>}
+      {aiError && <div role="alert" className="text-xs text-bear mb-3">{aiError}</div>}
+      {aiLoading && <div role="status" className="text-[11.5px] text-text-dim mb-3">{llm.label}</div>}
       {ai && ai.summary && (
         <div className={`mb-3 px-3 py-2.5 rounded-lg bg-accent/10 border border-accent/30 transition-opacity ${aiLoading ? 'opacity-50' : ''}`}>
           <div className="flex items-baseline justify-between gap-2 mb-1.5">
             <span className="text-[11px] text-accent font-medium">AI 情绪解读{aiLoading && <span className="ml-1 text-text-muted">· 重新分析中…</span>}</span>
-            <button onClick={() => loadAi(true)} disabled={aiLoading}
-              className="text-[10.5px] text-text-muted hover:text-text disabled:opacity-40 disabled:cursor-wait">
-              {aiLoading ? '分析中…' : '重新分析'}
-            </button>
           </div>
           <div className="text-[12.5px] text-text-bright leading-relaxed mb-1.5">{ai.summary}</div>
           {ai.cycle && (

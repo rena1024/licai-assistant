@@ -1,6 +1,7 @@
 import pytest
 import services.llm_client as llm
 import api.news_routes as news
+from services.llm_types import LLMError
 
 
 
@@ -42,6 +43,37 @@ def test_why_non_json_fallback(monkeypatch, authenticated_client):
     monkeypatch.setattr(llm, "call_claude", lambda *a, **k: "就是一段话不是JSON")
     r = client.post("/api/sector/why", json={"market": "HK", "name": "金融abc", "held": False})
     assert r.status_code == 200 and r.json()["why"]
+
+
+def test_why_allows_reasoning_and_complete_answer(monkeypatch, authenticated_client):
+    monkeypatch.setattr(news, "market_news", _fake_market_news)
+
+    def generate(prompt, system, model, max_tokens, **kwargs):
+        assert max_tokens >= 2048
+        return '{"why":"合成板块原因","relation":"合成持仓关系"}'
+
+    monkeypatch.setattr(llm, "call_claude", generate)
+    response = authenticated_client.post("/api/sector/why", json={"market": "A", "name": "合成输出空间"})
+    assert response.json()["why"] == "合成板块原因"
+
+
+def test_why_reports_truncation_and_can_retry(monkeypatch, authenticated_client):
+    monkeypatch.setattr(news, "market_news", _fake_market_news)
+    calls = 0
+
+    def generate(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise LLMError("incomplete_response", "模型达到输出上限，回答未完成")
+        return '{"why":"重试成功","relation":"无直接关系"}'
+
+    monkeypatch.setattr(llm, "call_claude", generate)
+    body = {"market": "A", "name": "合成截断重试"}
+    failed = authenticated_client.post("/api/sector/why", json=body).json()
+    assert failed["error_code"] == "incomplete_response"
+    assert "输出上限" in failed["error"]
+    assert authenticated_client.post("/api/sector/why", json=body).json()["why"] == "重试成功"
 
 
 @pytest.fixture(autouse=True)

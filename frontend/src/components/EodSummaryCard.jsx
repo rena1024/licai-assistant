@@ -3,7 +3,7 @@ import { fetchJSON } from '../hooks/useApi'
 
 const pctCls = (v) => v == null ? 'text-text-dim' : v > 0 ? 'text-bear' : v < 0 ? 'text-bull' : 'text-text-dim'
 
-// 收盘小结(站内版): 与 15:10 飞书推送同一份数据——没配飞书也能在这里看
+// 页面随时展示当前数据，定时结果通过通知中心及用户启用的渠道提醒。
 export default function EodSummaryCard() {
   const [d, setD] = useState(null)
   const [err, setErr] = useState('')
@@ -24,7 +24,7 @@ export default function EodSummaryCard() {
     <div className="bg-surface-3/60 border border-border-subtle rounded-lg px-3.5 py-3 mb-3">
       <div className="flex items-baseline gap-2 flex-wrap mb-1.5">
         <span className="text-[12.5px] font-semibold text-text-bright">收盘小结</span>
-        <span className="text-[10px] text-text-muted">{d.date} · 交易日15:10自动推飞书, 此处随时可看(盘中为实时切片)</span>
+        <span className="text-[10px] text-text-muted">{d.date} · 交易日北京时间15:10～15:40自动生成；外部提醒按通知设置发送。此处随时可看（盘中为实时数据）</span>
       </div>
 
       <div className="flex items-baseline gap-3 flex-wrap mb-1.5">

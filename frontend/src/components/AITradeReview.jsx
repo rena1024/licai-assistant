@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
-import { fetchJSON } from '../hooks/useApi'
+import { fetchAIJSON } from '../hooks/useApi'
+import useLLMStatus, { llmRequestHeaders } from '../hooks/useLLMStatus'
 import DailyReview from './DailyReview'
 import EodSummaryCard from './EodSummaryCard'
 import SkeletonCard from './Skeleton'
@@ -21,15 +22,21 @@ export default function AITradeReview() {
   const [cache, setCache] = useState({})   // period -> data
   const [loading, setLoading] = useState(false)
   const [err, setErr] = useState(false)
+  const [requestIds] = useState(() => Object.fromEntries(PERIODS.map(p => [p.key, llmRequestHeaders(`trade-review:${p.key}`)['X-LLM-Activity']])))
+  const llm = useLLMStatus(loading, { requestId: requestIds[period] })
 
-  const load = useCallback((p, force = false) => {
-    if (!force && cache[p]) return
+  const load = useCallback(async (p, force = false) => {
     setLoading(true); setErr(false)
-    fetchJSON(`/api/portfolio/trade-review-ai?period=${p}${force ? '&force=1' : ''}`)
-      .then(d => setCache(prev => ({ ...prev, [p]: d })))
-      .catch(() => setErr(true))
-      .finally(() => setLoading(false))
-  }, [cache])
+    try {
+      const d = await fetchAIJSON(`/api/portfolio/trade-review-ai?period=${p}${force ? '&force=1' : ''}`, { headers: { ...llm.headers, 'X-LLM-Activity': requestIds[p] } })
+      if (d.error) throw new Error(d.error)
+      setCache(prev => ({ ...prev, [p]: d }))
+    } catch {
+      setErr(true)
+    } finally {
+      setLoading(false)
+    }
+  }, [llm.headers, requestIds])
 
   useEffect(() => { load(period) }, [period, load])
 
@@ -49,6 +56,10 @@ export default function AITradeReview() {
               {p.label}
             </button>
           ))}
+          <button onClick={() => load(period, true)} disabled={loading}
+            className="text-[11px] px-2 py-0.5 rounded border border-border text-text-dim hover:text-text disabled:opacity-40">
+            {loading ? '生成中…' : '重新生成'}
+          </button>
         </div>
       </div>
 
@@ -61,7 +72,7 @@ export default function AITradeReview() {
 
       {period === 'day' && <div className="text-[11px] text-text-muted mb-1.5 tracking-wider">当日交易纪律</div>}
 
-      {loading && <SkeletonCard bare rows={5} label="AI 复盘中…（约 30–60 秒）" />}
+      {loading && <><p role="status" className="text-xs text-text-dim mb-2">{llm.label}</p><SkeletonCard bare rows={5} label="AI 复盘中…（约 30–60 秒）" /></>}
 
       {!loading && err && (
         <div className="flex items-center justify-between">
@@ -70,11 +81,11 @@ export default function AITradeReview() {
         </div>
       )}
 
-      {!loading && !err && d && d.empty && (
+      {d && d.empty && (
         <div className="text-center py-6 text-text-dim text-[13px]">{d.summary || '该时间窗无交易'}</div>
       )}
 
-      {!loading && !err && d && !d.empty && (
+      {d && !d.empty && (
         <>
           {/* 期间交易笔数 (日/周/月) */}
           {period !== 'all' && d.n_trades != null && (
@@ -161,7 +172,6 @@ export default function AITradeReview() {
 
           <div className="flex items-center justify-between pt-2.5 mt-2 border-t border-border-subtle">
             <span className="text-[10px] text-text-muted">基于真实流水复盘历史交易 · 仅客观回顾，不构成买卖建议</span>
-            <button onClick={() => load(period, true)} className="text-[11px] px-2 py-0.5 rounded border border-border text-text-dim hover:text-text hover:border-accent/40 shrink-0">重新复盘</button>
           </div>
         </>
       )}

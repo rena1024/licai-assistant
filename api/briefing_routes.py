@@ -1,6 +1,7 @@
 """Morning briefing endpoints."""
 from __future__ import annotations
 from services.user_context import require_user_id
+from services.ai_jobs import shared_ai_job
 import json
 from datetime import datetime, timezone, timedelta
 from fastapi import APIRouter
@@ -66,6 +67,7 @@ async def get_today_briefings():
 
 
 @router.post("/refresh")
+@shared_ai_job
 async def refresh_briefings():
     """Manually trigger briefing regeneration (sync, may take 10-30s for 3 stocks)."""
     from services.morning_briefing import generate_all_briefings

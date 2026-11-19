@@ -1,6 +1,7 @@
 import { apiFetch } from '../hooks/sessionRuntime'
 import { useState, useEffect } from 'react'
 import { MiniMarkdown } from './askShared'
+import useLLMStatus from '../hooks/useLLMStatus'
 
 const _cache = new Map()  // key=url||title → interpret 结果, 同会话重开秒显
 
@@ -8,6 +9,7 @@ export default function NewsDetailModal({ item, onClose }) {
   const [interp, setInterp] = useState(null)
   const [loading, setLoading] = useState(true)
   const cacheKey = item?.url || item?.title || ''
+  const llm = useLLMStatus(loading, { requestKey: `news-interpret:${cacheKey}` })
 
   useEffect(() => {
     const onKey = e => { if (e.key === 'Escape') onClose?.() }
@@ -20,7 +22,7 @@ export default function NewsDetailModal({ item, onClose }) {
     if (_cache.has(cacheKey)) { setInterp(_cache.get(cacheKey)); setLoading(false); return }
     setLoading(true)
     apiFetch('/api/news/interpret', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      method: 'POST', headers: llm.headers,
       body: JSON.stringify({ title: item.title, content: item.content || '', code: item.code || null, name: item.name || null, source: item.source || null, time: item.time || null, url: item.url || null }),
     }).then(r => r.json()).then(d => { _cache.set(cacheKey, d); setInterp(d) })
       .catch(() => setInterp({ error: '解读暂不可用' }))
@@ -29,7 +31,7 @@ export default function NewsDetailModal({ item, onClose }) {
     // 列 item 反而会因对象身份变化重复请求解读, 还会把 _cache 打穿。
     // (这里不加 eslint-disable: 那条注释会让 react-hooks 的编译器类规则对整个
     //  effect 放弃分析, 把同一处的 set-state-in-effect 错误一并吞掉。)
-  }, [cacheKey])
+  }, [cacheKey, llm.headers])
 
   if (!item) return null
   const hasUrl = !!item.url
@@ -48,7 +50,7 @@ export default function NewsDetailModal({ item, onClose }) {
 
         <div className="rounded-lg border border-accent/20 bg-accent/5 p-3 space-y-1.5">
           {loading ? (
-            <div className="text-[11.5px] text-text-dim animate-pulse">解读生成中…</div>
+            <div role="status" className="text-[11.5px] text-accent break-words">{llm.label}</div>
           ) : interp?.error ? (
             <div className="text-[11.5px] text-text-dim">解读暂不可用</div>
           ) : (

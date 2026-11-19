@@ -1,6 +1,7 @@
 """Sector radar endpoints."""
 from __future__ import annotations
 from services.user_context import require_user_id
+from services.ai_jobs import shared_ai_job
 import asyncio
 import hashlib
 import json as _json
@@ -18,6 +19,7 @@ from services.sector_us import scan_us_sectors
 from services.sector_hk import scan_hk_sectors
 from services.market_data import is_a_share
 import services.llm_client as _llm
+from services.llm_types import LLMError
 import api.news_routes as _news
 
 router = APIRouter(prefix="/api/sector", tags=["sector"])
@@ -59,6 +61,7 @@ _trend_cache: dict = {}
 
 
 @router.get("/trend-ai")
+@shared_ai_job(daily=True)
 async def sector_trend_ai(days: int = 10, force: bool = False):
     """基于量化矩阵的板块趋势 AI 分析: 走强/退潮/轮动/资金流向 + 跟持仓关系。纯客观, 不给买卖建议。"""
     import time as _t
@@ -236,6 +239,7 @@ _MARKET_CN = {"A": "A股", "HK": "港股", "US": "美股"}
 
 
 @router.post("/why")
+@shared_ai_job
 async def sector_why(data: WhyIn):
     hour = _dt.now().strftime("%Y-%m-%d-%H")
     key = hashlib.sha1(f"{require_user_id()}|{data.market}|{data.name}|{hour}".encode("utf-8")).hexdigest()
@@ -266,7 +270,11 @@ async def sector_why(data: WhyIn):
         + "\n\n请据此按要求输出 JSON。"
     )
     try:
-        raw = await asyncio.to_thread(_llm.call_claude, user_prompt, _WHY_SYS, None, 500, scene='sector')
+        # 输出额度也包含推理 token，需要为推理和完整的两段正文预留空间。
+        raw = await asyncio.to_thread(_llm.call_claude, user_prompt, _WHY_SYS, None, 2048, scene='sector')
+    except LLMError as exc:
+        return {"why": "", "relation": "", "error": str(_llm.ErrorText(exc)),
+                "error_code": exc.code, "cached": False}
     except Exception:
         return {"why": "", "relation": "", "error": "解读暂不可用", "cached": False}
     parsed = None

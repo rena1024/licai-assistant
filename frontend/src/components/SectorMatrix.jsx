@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
-import { fetchJSON } from '../hooks/useApi'
+import { fetchJSON, fetchAIJSON } from '../hooks/useApi'
+import useLLMStatus from '../hooks/useLLMStatus'
 import SkeletonCard from './Skeleton'
 
 // A股 涨红跌绿: pct → 背景色(强度按幅度), 文字色
@@ -22,25 +23,49 @@ export default function SectorMatrix() {
   const [ai, setAi] = useState(cached?.ai || null)
   const [loading, setLoading] = useState(!cached)
   const [aiLoading, setAiLoading] = useState(!cached?.ai)
+  const [aiError, setAiError] = useState('')
+  const llm = useLLMStatus(aiLoading, { requestKey: `/api/sector/trend-ai?days=${days}` })
 
-  const load = useCallback((dy, force = false) => {
+  const load = useCallback(async (dy, force = false) => {
     const cache = readCache(dy)
-    // 有缓存先秒显, 不显示 loading; 无缓存才转圈
+    // 有缓存先显示旧结果；新的 AI 请求仍显示实际调用状态。
     if (cache?.m) setM(cache.m)
     if (cache?.ai) setAi(cache.ai)
     setLoading(!cache?.m || force)
-    setAiLoading(!cache?.ai || force)
+    setAiLoading(true); setAiError('')
     let nm = cache?.m || null, na = cache?.ai || null
-    fetchJSON(`/api/sector/matrix?days=${dy}${force ? '&force=true' : ''}`)
-      .then(r => { nm = r; setM(r); writeCache(dy, nm, na) }).catch(() => {}).finally(() => setLoading(false))
-    fetchJSON(`/api/sector/trend-ai?days=${dy}${force ? '&force=true' : ''}`)
-      .then(r => { na = r; setAi(r); writeCache(dy, nm, na) }).catch(() => {}).finally(() => setAiLoading(false))
-  }, [])
+    await Promise.all([
+      fetchJSON(`/api/sector/matrix?days=${dy}${force ? '&force=true' : ''}`)
+        .then(r => { nm = r; setM(r); writeCache(dy, nm, na) }).catch(() => {}).finally(() => setLoading(false)),
+      fetchAIJSON(`/api/sector/trend-ai?days=${dy}${force ? '&force=true' : ''}`, { headers: llm.headers })
+        .then(r => {
+          if (r.error) throw new Error(r.error)
+          na = r; setAi(r); writeCache(dy, nm, na)
+        }).catch(e => setAiError(e.message || '分析未完成，请点击“重新生成”重试')).finally(() => setAiLoading(false)),
+    ])
+  }, [llm.headers])
 
-  useEffect(() => { load(days) }, [days, load])
+  useEffect(() => {
+    let current = true
+    queueMicrotask(() => { if (current) void load(days) })
+    return () => { current = false }
+  }, [days, load])
 
-  if (loading && !m) return <SkeletonCard rows={6} label="板块矩阵计算中(首次约20-40秒)" />
-  if (!m || !(m.rows || []).length) return null
+  const regenerateButton = (
+    <button onClick={() => load(days, true)} disabled={loading || aiLoading}
+      className="text-[11px] px-2 py-0.5 rounded border border-border text-text-dim hover:text-text disabled:opacity-40 disabled:cursor-wait">
+      {(loading || aiLoading) ? '生成中…' : '重新生成'}
+    </button>
+  )
+  if (loading && !m) return <><SkeletonCard rows={6} label="板块矩阵计算中(首次约20-40秒)" />{aiLoading && <p role="status" className="text-xs text-text-dim">{llm.label}</p>}</>
+  if (!m || !(m.rows || []).length) return (
+    <div className="bg-surface-2 border border-border rounded-xl p-4 md:p-5">
+      <div className="flex items-center justify-between gap-2"><span>板块趋势矩阵</span>{regenerateButton}</div>
+      <p className="text-xs text-text-dim">暂无可用板块数据</p>
+      {aiLoading && <p role="status" className="text-xs text-text-dim">{llm.label}</p>}
+      {aiError && <p role="alert" className="text-xs text-bear">{aiError}</p>}
+    </div>
+  )
 
   return (
     <div className="bg-surface-2 border border-border rounded-xl p-4 md:p-5">
@@ -59,15 +84,13 @@ export default function SectorMatrix() {
               {dy}日
             </button>
           ))}
-          <button onClick={() => load(days, true)} disabled={loading || aiLoading}
-            className="text-[11px] px-2 py-0.5 rounded border border-border text-text-dim hover:text-text disabled:opacity-40 disabled:cursor-wait">
-            {(loading || aiLoading) ? '刷新中…' : '刷新'}
-          </button>
+          {regenerateButton}
         </div>
       </div>
 
       {/* AI 趋势分析 */}
-      {aiLoading && !ai?.summary && <div className="text-[11.5px] text-text-dim mb-3">AI 分析板块趋势中…<span className="text-text-muted">(Opus 推理约 10–20 秒)</span></div>}
+      {aiError && <div role="alert" className="text-xs text-bear mb-3">{aiError}</div>}
+      {aiLoading && <div role="status" className="text-[11.5px] text-text-dim mb-3">{llm.label}</div>}
       {ai && ai.summary && (
         <div className={`mb-3 px-3 py-2.5 rounded-lg bg-accent/10 border border-accent/30 transition-opacity ${aiLoading ? 'opacity-50' : ''}`}>
           <div className="flex items-baseline justify-between gap-2 mb-1.5">
