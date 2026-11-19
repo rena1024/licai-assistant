@@ -280,7 +280,7 @@ async def _briefing_foreign(stock_code: str, stock_name: str, cost_price: float,
             "health_level": None}
 
 
-async def generate_all_briefings() -> list[dict]:
+async def generate_all_briefings(*, notify=True) -> list[dict]:
     """Generate briefings for every 个股持仓(A股/港股/美股) + 场内 ETF 持仓. Saves each to DB."""
     from database import get_all_holdings, save_briefing, list_external_assets, list_external_actions
     from services.market_data import get_realtime_quotes, is_a_share, split_stock_code
@@ -334,6 +334,7 @@ async def generate_all_briefings() -> list[dict]:
             results.append(briefing)
         except Exception as e:
             print(f"[briefing] {code} failed: {e}")
+            results.append(await _save_failed_briefing(code, h.get('stock_name', ''), today))
     for e in etfs:
         code = e["code"]
         q = quotes.get(code) or {}
@@ -353,10 +354,51 @@ async def generate_all_briefings() -> list[dict]:
             results.append(briefing)
         except Exception as ex:
             print(f"[briefing] etf {code} failed: {ex}")
-    if results:
+            results.append(await _save_failed_briefing(code, e.get('name', ''), today))
+    if results and notify:
         from services.notifications import emit
         await emit('briefing',today,title='个人简报已更新',body='个人简报已生成，请在开盘情绪或简报页面查看。')
     return results
+
+
+async def _save_failed_briefing(code, name, day):
+    from database import save_briefing
+    result = {'stock_code': code, 'stock_name': name, 'briefing_date': day,
+              'error': '简报生成失败，请检查行情及模型服务后手动重试。',
+              'summary': '本次未能生成完整简报', 'signal': '中性', 'confidence': 'low', 'points': []}
+    await save_briefing(code, day, json.dumps(result, ensure_ascii=False), user_id=require_user_id())
+    return result
+
+
+async def generate_scheduled_briefing(day):
+    """定时简报按用户通知设置发送结果提醒，失败不重复执行付费任务。"""
+    from services.notifications import emit
+    from services.llm_runtime import _scene
+    token = _scene.set('briefing')
+    try:
+        try:
+            results = await generate_all_briefings(notify=False)
+        except Exception as exc:
+            print(f'[briefing] 定时生成失败: {type(exc).__name__}')
+            title = '早盘简报生成失败'
+            body = '本次自动生成未完成，请检查行情及模型服务后手动重试。'
+        else:
+            failed = sum(bool(item.get('error')) for item in results)
+            if not results:
+                title = '早盘简报未生成'
+                body = '本次没有可用简报，请检查是否有有效持仓，以及行情和模型服务是否可用。'
+            elif failed == len(results):
+                title = '早盘简报生成失败'
+                body = '本次简报均未完整生成，请在早盘简报页面查看原因并手动重试。'
+            elif failed:
+                title = '早盘简报已更新（部分失败）'
+                body = f'已生成 {len(results) - failed} 份简报，另有 {failed} 份未完成，请在早盘简报页面查看。'
+            else:
+                title = '早盘简报已生成'
+                body = f'今日 {len(results)} 份早盘简报已生成，请在早盘简报页面查看。'
+        await emit('briefing', f'scheduled:{day}', title=title, body=body)
+    finally:
+        _scene.reset(token)
 
 
 def _quote_context(quote):

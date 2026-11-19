@@ -166,12 +166,13 @@ async def lifespan(app: FastAPI):
         _mp = getattr(config, "market_provider", "") or ""
         if _mp:
             os.environ["MARKET_PROVIDER"] = _mp
-    from services.scheduler import personal_loop, public_loop
+    from services.scheduler import personal_loop, public_loop, briefing_loop
     from services.notification_delivery import delivery_loop
     notification_task = asyncio.create_task(delivery_loop())
     task1 = asyncio.create_task(price_monitor_loop())
     task2 = asyncio.create_task(backup_loop())
     task4 = asyncio.create_task(personal_loop())
+    briefing_task = asyncio.create_task(briefing_loop())
     task12 = asyncio.create_task(public_loop())
     task5 = asyncio.create_task(news_prewarm_loop())
     task6 = asyncio.create_task(sector_matrix_prewarm_loop())
@@ -183,6 +184,7 @@ async def lifespan(app: FastAPI):
     task1.cancel()
     task2.cancel()
     task4.cancel()
+    briefing_task.cancel()
     task12.cancel()
     task5.cancel()
     task7.cancel()

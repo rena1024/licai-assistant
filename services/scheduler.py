@@ -93,12 +93,38 @@ async def personal_tick():
     if 910 <= minutes <= 940 and _is_a_share_trading_day(now.date()):
         await _once('eod',today,push_eod_summary)
     if await get_user_setting('automatic_ai_enabled',user_id=require_user_id()) == '1':
-        from services.morning_briefing import generate_all_briefings
         from services.rule_forge import mine_new
-        if now.weekday() < 5 and 535 <= minutes <= 550:
-            await _once('briefing',today,generate_all_briefings)
         if now.weekday() == 0 and 560 <= minutes <= 600:
             await _once('rules',today,mine_new)
+
+
+async def briefing_tick(*, now=None):
+    from services.user_context import require_user_id
+    from services.morning_briefing import generate_scheduled_briefing
+    now = (now or datetime.now(timezone.utc)).astimezone(timezone(timedelta(hours=8)))
+    if (now.hour, now.minute) != (9, 0):
+        return
+    if await get_user_setting('automatic_ai_enabled', user_id=require_user_id()) != '1':
+        return
+    today = now.date().isoformat()
+    await _once('briefing', today, lambda: generate_scheduled_briefing(today))
+
+
+async def briefing_loop():
+    """独立于行情和资产计算，按北京时间整分钟检查，不补跑错过的日期。"""
+    from services.runtime_state import runtime_scope, RuntimeUnavailable
+    while True:
+        now = datetime.now(timezone(timedelta(hours=8)))
+        try:
+            if (now.hour, now.minute) == (9, 0):
+                with runtime_scope():
+                    # 同一轮用户共享触发时刻，避免前一用户生成耗时使后续用户错过窗口。
+                    await dispatch_personal(lambda: briefing_tick(now=now), ai=True)
+        except RuntimeUnavailable:
+            pass
+        except Exception:
+            print('[scheduler] 早盘简报调度失败')
+        await asyncio.sleep(60 - datetime.now(timezone.utc).timestamp() % 60)
 
 
 async def personal_loop():
