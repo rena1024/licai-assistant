@@ -10,7 +10,9 @@
 
 **Spec:** [需求 v0.40](../specs/2026-10-14-local-deployment-multi-user-requirements.md)。编制日期 2026-10-15。
 
-执行状态以 `tasks/todo.md`、`tasks/evidence/b-execution.md` 为准。2026-10-19 复核：B 原计划核心实现与离线验证完成，但新增 DeepSeek 分时计价（B02-F01）未实现，B02 重新打开；本机 Ollama 文本有成功记录，完整厂商／场景矩阵（B-V01）及 B 完整门槛（B-V02）仍待验收。不能标 B 全部完成；C／D 后续状态保留。
+执行状态以 `tasks/todo.md` 及 [2026-11-19 对齐记录](../../../tasks/evidence/2026-11-19-alignment.md) 为准；后者登记基线之后的需求增补、冲突及提交证据。以下 2026-10-19 状态为历史记录。
+
+2026-10-19 复核：B 原计划核心实现与离线验证完成，但新增 DeepSeek 分时计价（B02-F01）未实现，B02 重新打开；本机 Ollama 文本有成功记录，完整厂商／场景矩阵（B-V01）及 B 完整门槛（B-V02）仍待验收。不能标 B 全部完成；C／D 后续状态保留。
 
 ## Global Constraints
 
