@@ -651,9 +651,9 @@ def _parse_llm_json(raw):
 
 
 @router.get("/trade-review-ai")
+@shared_ai_job(daily=True)
 async def trade_review_ai(period: str = "all", force: int = 0):
     """LLM 交易纪律复盘。period: all(全周期总览) / day(当日) / week(本周) / month(本月)。
-@shared_ai_job(daily=True)
     纯客观举证, 严禁任何未来买卖建议。"""
     import time, asyncio, json, datetime as _dt
     from services import llm_client

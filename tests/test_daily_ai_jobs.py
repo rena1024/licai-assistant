@@ -145,3 +145,11 @@ def test_previous_day_late_result_does_not_overwrite_new_day(owners, monkeypatch
             assert await summary() == {'summary': '今天结果'}
             assert len(calls) == 2
     asyncio.run(exercise())
+
+
+def test_all_daily_routes_are_wrapped_in_shared_jobs():
+    from api import market_routes, news_routes, portfolio_routes, sector_routes
+    for function in (market_routes.market_structure, market_routes.sentiment_ai,
+                     news_routes.news_digest, news_routes.daily_review,
+                     portfolio_routes.trade_review_ai, sector_routes.sector_trend_ai):
+        assert hasattr(function, '__wrapped__'), function.__name__
