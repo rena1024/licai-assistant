@@ -1,6 +1,7 @@
 import React from 'react'
 import { fmtMoney } from '../../helpers'
 import { fetchJSON } from '../../hooks/useApi'
+import { calculateConfirmation } from './confirmation'
 
 // AssetActionsModal — 流水查看 + pending 确认.
 export function AssetActionsModal({ asset, onClose, onChanged }) {
@@ -187,55 +188,41 @@ export function AssetActionsModal({ asset, onClose, onChanged }) {
 function EditActionModal({ asset, action, onClose, onDone }) {
   // 已 confirmed 流水的"改"弹窗: 改 amount / shares / unit_price / fee
   // 改完后端会同步 asset cost_amount/shares
-  // 联动: 用 lastEdit 追踪用户上次手动改的字段, 另外两个被反推. 改 fee 时 amount 跟着 s*u+fee 走.
+  // 联动只在用户修改后触发，避免打开旧流水时自动覆盖历史金额。
+  const isRedeem = action.action_type === 'REDEEM' || action.action_type === 'SELL'
   const [amount, setAmount] = React.useState(action.amount != null ? String(action.amount) : '')
   const [shares, setShares] = React.useState(action.shares != null ? String(action.shares) : '')
-  const [unitPrice, setUnitPrice] = React.useState(action.unit_price != null ? String(action.unit_price) : '')
+  const [unitPrice, setUnitPrice] = React.useState(() => {
+    const value = editableActionUnitPrice(action)
+    return value == null ? '' : (isRedeem ? String(Number(value.toFixed(6))) : String(value))
+  })
   const [fee, setFee] = React.useState(action.fee != null ? String(action.fee) : '')
   const [tradeDate, setTradeDate] = React.useState((action.trade_date || (action.created_at || '').slice(0, 10) || '').slice(0, 10))
   const [tradeTime, setTradeTime] = React.useState((action.trade_time || '').slice(0, 5))   // 成交时刻 HH:MM
   const [lastEdit, setLastEdit] = React.useState(null)  // 'amount' | 'shares' | 'unitPrice'
+  const [deductedSavedFee, setDeductedSavedFee] = React.useState(false)
   const [busy, setBusy] = React.useState(false)
   const [err, setErr] = React.useState('')
 
   const hasShares = asset.asset_type === 'FUND' || asset.asset_type === 'CRYPTO'
 
-  // 反推: amount = shares × unit_price + fee (净额逻辑)
-  // 用户上次改了哪个字段, 就反推另一个 (优先反推 amount, 让 ledger 跟手算一致)
+  // 修改份额、净值或手续费时重算金额；手填金额则反推净值，赎回金额始终为净到账。
   React.useEffect(() => {
-    if (!hasShares) return
-    const a = parseFloat(amount), s = parseFloat(shares), u = parseFloat(unitPrice), f = parseFloat(fee) || 0
-    // 改 shares: amount = s × u + fee
-    if (lastEdit === 'shares' && s > 0 && u > 0) {
-      const next = (s * u + f).toFixed(2)
-      if (next !== amount) setAmount(next)
-    }
-    // 改 unitPrice: amount = s × u + fee
-    else if (lastEdit === 'unitPrice' && s > 0 && u > 0) {
-      const next = (s * u + f).toFixed(2)
-      if (next !== amount) setAmount(next)
-    }
-    // 改 amount: 单价 = (amount − fee) / shares
-    else if (lastEdit === 'amount' && a > 0 && s > 0) {
-      const net = Math.max(0, a - f)
-      const next = (net / s).toFixed(4)
+    if (!hasShares || !lastEdit) return
+    const editedAmount = lastEdit === 'amount'
+    const result = calculateConfirmation({
+      isAdd: !isRedeem, amount: editedAmount ? amount : '', shares,
+      unitPrice: editedAmount ? '' : unitPrice, fee,
+    })
+    if (result.error) return
+    if (editedAmount && result.unitPrice > 0) {
+      const next = result.unitPrice.toFixed(6)
       if (next !== unitPrice) setUnitPrice(next)
-    }
-  }, [amount, shares, unitPrice, fee, lastEdit, hasShares])
-
-  // fee 单独 effect: 改 fee 时, 如果 shares × unit_price 都有, 自动让 amount 跟上 (净额不变 + 新 fee)
-  React.useEffect(() => {
-    if (!hasShares || lastEdit === 'amount') return
-    const s = parseFloat(shares), u = parseFloat(unitPrice), f = parseFloat(fee) || 0
-    if (s > 0 && u > 0) {
-      const next = (s * u + f).toFixed(2)
+    } else if (!editedAmount && Number(shares) > 0 && Number(unitPrice) > 0 && result.amount > 0) {
+      const next = result.amount.toFixed(2)
       if (next !== amount) setAmount(next)
     }
-    // 刻意只听 fee(见上方注释): 它的职责就是「改 fee 时让 amount 跟上」。
-    // 把 shares/unitPrice/amount 列进来, 用户编辑股数时它也会抢着改 amount,
-    // 与另外几个 effect 打架; 而 amount 本身又被它 setAmount, 有转圈风险。
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [fee])
+  }, [amount, shares, unitPrice, fee, lastEdit, hasShares, isRedeem])
 
   React.useEffect(() => {
     const onKey = e => { if (e.key === 'Escape') onClose() }
@@ -246,7 +233,14 @@ function EditActionModal({ asset, action, onClose, onDone }) {
   const submit = async () => {
     setErr('')
     const body = {}
-    const a = parseFloat(amount), s = parseFloat(shares), u = parseFloat(unitPrice), f = parseFloat(fee)
+    if ([amount, shares, unitPrice, fee].some(value => value !== '' && (!Number.isFinite(Number(value)) || Number(value) < 0))) {
+      setErr('金额、份额、净值和手续费须为非负有限数字'); return
+    }
+    if (hasShares && lastEdit && lastEdit !== 'amount') {
+      const result = calculateConfirmation({ isAdd: !isRedeem, shares, unitPrice, fee })
+      if (result.error) { setErr(result.error); return }
+    }
+    const a = parseFloat(amount), s = parseFloat(shares), u = parseFloat(unitPrice), f = fee === '' ? 0 : parseFloat(fee)
     // 只把"用户改过的"字段传给后端 — 简单判定: 跟 action 原值不同就算改了
     if (!isNaN(a) && a !== (action.amount ?? 0)) body.amount = a
     if (hasShares && !isNaN(s) && s !== (action.shares ?? 0)) body.shares = s
@@ -278,7 +272,7 @@ function EditActionModal({ asset, action, onClose, onDone }) {
         <div className="text-[11px] text-text-dim">
           类型 <span className="font-mono text-text">{action.action_type}</span>
           <span className="mx-1.5">·</span>
-          改完后端会按新值重算资产 cost / shares
+          保存后按流水重算持有份额、成本和盈亏
         </div>
 
         <div className="grid grid-cols-2 gap-2">
@@ -297,14 +291,32 @@ function EditActionModal({ asset, action, onClose, onDone }) {
 
         <div>
           <label className="text-[11.5px] text-text-dim block mb-1">
-            金额 (CNY, 含手续费)
+            {isRedeem ? '实际到账金额 (CNY, 已扣手续费)' : '金额 (CNY, 含手续费)'}
             {hasShares && lastEdit && lastEdit !== 'amount' && (
-              <span className="text-text-muted text-[10px] ml-1">— 自动 = 份额×单价 + 手续费</span>
+              <span className="text-text-muted text-[10px] ml-1">{isRedeem
+                ? '— 自动 = 份额×净值 − 手续费' : '— 自动 = 份额×单价 + 手续费'}</span>
             )}
           </label>
           <input type="number" inputMode="decimal" value={amount}
             onChange={e => { setAmount(e.target.value); setLastEdit('amount') }}
             className="w-full bg-bg border border-border rounded-lg px-3 py-2 text-[13px] font-mono outline-none focus:border-accent" />
+          {isRedeem && Number(fee) > 0 && (
+            <div className="mt-1.5 text-[10.5px] text-text-muted">
+              <span>仅当这笔旧记录的原金额尚未扣手续费时使用，已是到账金额请勿重复扣除。</span>
+              <button type="button" disabled={deductedSavedFee}
+                onClick={() => {
+                  try {
+                    setAmount(deductRedemptionFee(amount, fee).toFixed(2))
+                    setLastEdit('amount')
+                    setDeductedSavedFee(true)
+                    setErr('')
+                  } catch (error) { setErr(error.message) }
+                }}
+                className="mt-1 px-2 py-1 rounded border border-border text-accent cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed">
+                {deductedSavedFee ? '本次已扣除手续费，请保存' : '原金额未扣费：扣除一次手续费'}
+              </button>
+            </div>
+          )}
         </div>
 
         {hasShares && (
@@ -317,9 +329,10 @@ function EditActionModal({ asset, action, onClose, onDone }) {
             </div>
             <div>
               <label className="text-[11.5px] text-text-dim block mb-1">
-                净值 / 单价
+                {isRedeem ? '成交净值（扣费前）' : '净值 / 单价'}
                 {lastEdit === 'amount' && (
-                  <span className="text-text-muted text-[10px] ml-1">— 自动 = (金额−费)/份额</span>
+                  <span className="text-text-muted text-[10px] ml-1">{isRedeem
+                    ? '— 自动 = (到账金额＋费)/份额' : '— 自动 = (金额−费)/份额'}</span>
                 )}
               </label>
               <input type="number" inputMode="decimal" value={unitPrice}
@@ -331,7 +344,8 @@ function EditActionModal({ asset, action, onClose, onDone }) {
 
         <div>
           <label className="text-[11.5px] text-text-dim block mb-1">手续费 (CNY)</label>
-          <input type="number" inputMode="decimal" value={fee} onChange={e => setFee(e.target.value)}
+          <input type="number" inputMode="decimal" value={fee}
+            onChange={e => { setFee(e.target.value); setLastEdit('fee') }}
             className="w-full bg-bg border border-border rounded-lg px-3 py-2 text-[13px] font-mono outline-none focus:border-accent" />
         </div>
 
@@ -379,23 +393,22 @@ function ConfirmActionModal({ asset, action, onClose, onDone }) {
   const a = parseFloat(amount) || 0
   const s = parseFloat(shares) || 0
   const u = parseFloat(unitPrice) || 0
-  const fNum = parseFloat(fee) || 0
   // 申购费率外扣: 没手填 fee 时, 对场外基金申购按费率自动算 (净额=金额/(1+费率))
   const feeRate = isAdd ? (parseFloat(asset.purchase_fee_rate) || 0) : 0
-  const autoFee = feeRate > 0 && a > 0 ? +(a - a / (1 + feeRate)).toFixed(2) : 0
-  const effFee = fNum > 0 ? fNum : autoFee
-  // 净额: 用户填的"金额"是含费的总付出, 实际买到份额的净额 = amount - 实际手续费
-  const netForShares = Math.max(0, a - effFee)
+  const confirmation = calculateConfirmation({ isAdd, amount, shares, unitPrice, fee, feeRate })
+  const autoFee = confirmation.autoFee || 0
+  const effFee = confirmation.fee || 0
+  const netForShares = Math.max(0, confirmation.tradeAmount || 0)
 
-  // 反推占位 (用净额, 不用 amount)
-  const inferredUnit = (netForShares > 0 && s > 0 && !u) ? (netForShares / s).toFixed(4) : ''
-  const inferredShares = (netForShares > 0 && u > 0 && !s) ? (netForShares / u).toFixed(4) : ''
-  const inferredAmount = (s > 0 && u > 0 && !a) ? (s * u + fNum).toFixed(2) : ''
+  // 买入用净申购金额，赎回用扣费前成交金额反推净值。
+  const inferredUnit = (confirmation.unitPrice > 0 && !u) ? confirmation.unitPrice.toFixed(4) : ''
+  const inferredShares = (confirmation.shares > 0 && !s) ? confirmation.shares.toFixed(4) : ''
+  const inferredAmount = (confirmation.amount > 0 && !a) ? confirmation.amount.toFixed(2) : ''
 
   const submit = async () => {
     setErr('')
-    let finalAmount = a
-    if (!finalAmount && s > 0 && u > 0) finalAmount = s * u + effFee
+    if (confirmation.error) { setErr(confirmation.error); return }
+    const finalAmount = confirmation.amount
     if (!finalAmount || finalAmount <= 0) { setErr('金额必填'); return }
     if (isAdd && !s && !u) { setErr('申购确认: 至少填份额或净值'); return }
     setBusy(true)
@@ -403,7 +416,7 @@ function ConfirmActionModal({ asset, action, onClose, onDone }) {
       const body = { amount: finalAmount }
       if (s > 0) body.shares = s
       if (u > 0) body.unit_price = u
-      if (effFee > 0) body.fee = effFee
+      body.fee = effFee
       await fetchJSON(`/api/assets/${asset.id}/actions/${action.id}/confirm`, {
         method: 'PUT', body: JSON.stringify(body),
       })
@@ -433,10 +446,12 @@ function ConfirmActionModal({ asset, action, onClose, onDone }) {
 
         <div>
           <label className="text-[11.5px] text-text-dim block mb-1">
-            金额 (CNY, 含手续费)
+            {isAdd ? '金额 (CNY, 含手续费)' : '实际到账金额 (CNY, 已扣手续费)'}
             {isSharesMode
               ? <span className="text-text-muted text-[10px]"> — 留空将自动 = 份额 × 单价 + 手续费</span>
-              : isAdd && <span className="text-text-muted text-[10px]"> — 你实际付出的总额, 含手续费</span>}
+              : isAdd
+                ? <span className="text-text-muted text-[10px]"> — 你实际付出的总额, 含手续费</span>
+                : <span className="text-text-muted text-[10px]"> — 留空自动计算：份额 × 净值 − 手续费</span>}
           </label>
           <input type="number" inputMode="decimal" placeholder={inferredAmount || '0'}
             value={amount} onChange={e => setAmount(e.target.value)}
@@ -456,7 +471,7 @@ function ConfirmActionModal({ asset, action, onClose, onDone }) {
           </div>
           <div>
             <label className="text-[11.5px] text-text-dim block mb-1">
-              净值 / 单价 {isSharesMode
+              {isAdd ? '净值 / 单价' : '成交净值（扣费前）'} {isSharesMode
                 ? <span className="text-warn text-[10px]">*</span>
                 : <span className="text-text-muted text-[10px]">可空</span>}
             </label>
@@ -469,7 +484,9 @@ function ConfirmActionModal({ asset, action, onClose, onDone }) {
 
         <div>
           <label className="text-[11.5px] text-text-dim block mb-1">
-            手续费 (CNY) <span className="text-text-muted text-[10px]">— 含在上方金额里, 单填方便看净额</span>
+            手续费 (CNY) <span className="text-text-muted text-[10px]">{isAdd
+              ? '— 含在上方金额里, 单填方便看净额'
+              : '— 留空为 0，填写后从赎回总额扣除'}</span>
             {feeRate > 0 && (
               <span className="text-accent text-[10px] ml-1">
                 · 申购费率 {(feeRate * 100).toFixed(2)}% 自动外扣 {autoFee > 0 ? `¥${autoFee.toFixed(2)}` : ''}
@@ -493,12 +510,14 @@ function ConfirmActionModal({ asset, action, onClose, onDone }) {
               券商费率
             </button>
           </div>
-          {effFee > 0 && a > 0 && (
+          {(effFee > 0 || !isAdd) && confirmation.amount > 0 && (
             <div className="text-[10.5px] text-text-muted mt-1">
-              净额 ¥{netForShares.toFixed(2)} (= 金额 ¥{a.toFixed(2)} − 费 ¥{effFee.toFixed(2)}
-              {fNum <= 0 && autoFee > 0 && <span className="text-accent"> 申购费率</span>})
-              {s > 0 && netForShares > 0 && (
-                <span className="ml-1.5">· 实际净值 ≈ <span className="font-mono">{(netForShares / s).toFixed(4)}</span></span>
+              {isAdd
+                ? <>净申购金额 ¥{netForShares.toFixed(2)} (= 总支出 ¥{confirmation.amount.toFixed(2)} − 手续费 ¥{effFee.toFixed(2)}</>
+                : <>实际到账 ¥{confirmation.amount.toFixed(2)} (= 赎回总额 ¥{netForShares.toFixed(2)} − 手续费 ¥{effFee.toFixed(2)}</>}
+              {fee === '' && autoFee > 0 && <span className="text-accent"> 申购费率</span>})
+              {confirmation.shares > 0 && (
+                <span className="ml-1.5">· {isAdd ? '成交净值' : '扣费后净值'} ≈ <span className="font-mono">{((isAdd ? netForShares : confirmation.amount) / confirmation.shares).toFixed(4)}</span></span>
               )}
             </div>
           )}

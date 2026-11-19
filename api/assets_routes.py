@@ -2,6 +2,7 @@
 from __future__ import annotations
 from services.user_context import require_user_id
 import asyncio
+import math
 from typing import Optional
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
@@ -983,7 +984,7 @@ class ConfirmAction(BaseModel):
     amount: float
     shares: Optional[float] = None
     unit_price: Optional[float] = None
-    fee: Optional[float] = None     # 手续费 (CNY), 含在 amount 里
+    fee: Optional[float] = None     # 买入 amount 含费；赎回 amount 为扣费后到账金额
 
 
 @router.put("/{asset_id}/actions/{action_id}/confirm")
@@ -992,7 +993,7 @@ async def confirm_action(asset_id: int, action_id: int, data: ConfirmAction):
     asset = await get_external_asset(asset_id, user_id=require_user_id())
     if not asset:
         raise HTTPException(404, "asset not found")
-    if data.amount is None or data.amount <= 0:
+    if data.amount is None or not math.isfinite(data.amount) or data.amount <= 0:
         raise HTTPException(400, "amount 必须为正数")
 
     actions = await list_external_actions(asset_id, user_id=require_user_id())
@@ -1004,17 +1005,24 @@ async def confirm_action(asset_id: int, action_id: int, data: ConfirmAction):
 
     shares = data.shares if data.shares is not None else target.get("shares")
     unit_price = data.unit_price
+    is_buy = (target.get("action_type") or "").upper() in ("ADD", "BUY")
     # 手续费: 显式传了就用显式值; 没传则对场外基金申购按申购费率外扣自动算,
     # 跟「一键确认到期定投」(settle-pending) 口径一致 → 净额=金额/(1+费率)。
     if data.fee is not None:
         fee = float(data.fee)
     else:
         rate = float(asset.get("purchase_fee_rate") or 0)
-        is_buy = (target.get("action_type") or "").upper() in ("ADD", "BUY")
         fee = round(float(data.amount) - float(data.amount) / (1 + rate), 2) \
             if (asset.get("asset_type") == "FUND" and rate > 0 and is_buy) else 0.0
-    # 净额 = amount - fee (实际买到份额对应的钱), 反推 unit_price 用净额
-    net_for_shares = float(data.amount) - fee
+    if not math.isfinite(fee) or fee < 0:
+        raise HTTPException(400, "手续费须为非负有限数字")
+    for label, value in (("份额", shares), ("净值", unit_price)):
+        if value is not None and (not math.isfinite(value) or value <= 0):
+            raise HTTPException(400, f"{label}须为正数且为有限数字")
+    # 买入总支出扣除手续费；赎回净到账加回手续费，还原用于换算份额/净值的成交总额。
+    net_for_shares = float(data.amount) - fee if is_buy else float(data.amount) + fee
+    if net_for_shares <= 0:
+        raise HTTPException(400, "手续费须小于买入总金额")
     if shares and shares > 0 and (unit_price is None or unit_price <= 0):
         unit_price = round(net_for_shares / float(shares), 6) if net_for_shares > 0 else 0
     elif unit_price and unit_price > 0 and (shares is None or shares <= 0):
