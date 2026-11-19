@@ -3,7 +3,7 @@
 FIFO cost basis:
 - BUY / ADD / BONUS → append a lot (BONUS = 送股, price=0 amount=0 只加 shares)
 - SELL / REDUCE → consume from oldest lots first
-- DIVIDEND → 现金分红, 直接进 realized_pnl (不动 lot 不动 cost_price)
+- DIVIDEND → 现金分红计入已实现。A 股展示成本可扣减本持仓段的实收股息。
 - SPLIT → 拆股/合股(港美股): 比例记在 price(新股数/旧股数, >1 拆股、<1 合股), shares 记 0;
   每个 lot 股数×比例、单价÷比例, 成本与现金都不动
 
@@ -22,6 +22,7 @@ from services.user_context import require_user_id
 from datetime import date, datetime
 from typing import Iterable
 
+from config import config
 from services.market_data import is_a_share
 
 ACQUIRE = {"BUY", "ADD", "BONUS"}     # 买入 / 加仓 / 送股转增 (BONUS price=0 amount=0 只加 shares)
@@ -193,6 +194,8 @@ def compute_position_state(
     commission_min: float | None = None,
     cash_div_per_share: float = 0.0,
     fx_now: float | None = None,
+    *,
+    use_booked_dividends: bool = False,
 ) -> dict:
     """Process actions in chronological order using FIFO.
 
@@ -250,6 +253,7 @@ def compute_position_state(
     # 每个金额累计都有一份 _c 孪生(人民币口径, 每笔按自己的汇率折); A 股汇率 1, 两份相等。
     lots: list[dict] = []          # 当前段的 FIFO lots (清仓时自然清空); fx = 买入时汇率
     income_realized = income_realized_c = 0.0   # 现金分红累计 (DIVIDEND, 税后), 不进 FIFO 配对
+    ep_cash_dividend = 0.0        # 当前持仓段持有期间实际到账的股息
     dividend_tax = 0.0             # 港美股分红预扣税累计(原币)
     realized_carry = realized_carry_c = 0.0     # 已平仓段的已实现 (不在当前浮动里)
     fx_realized = 0.0              # 已实现里的汇兑部分: 卖出份额的买入本金 × (卖出汇率 − 买入汇率)
@@ -292,6 +296,7 @@ def compute_position_state(
                     ep_buy_shares = ep_matched = 0
                     ep_buy_fees = ep_sell_fees = ep_buy_fees_c = ep_sell_fees_c = 0.0
                     ep_realized_excl_fees = ep_realized_excl_fees_c = 0.0
+                    ep_cash_dividend = 0.0
                 flat_date = None
             # BONUS 是送股: price=0 → lot 的 shares 累加但 fifo_total 不变, cost_price 被动摊薄。
             lots.append({"shares": shares, "price": price, "fx": fx, "trade_date": ad})
@@ -380,6 +385,8 @@ def compute_position_state(
             dividend_tax += tax
             income_realized += amt - tax
             income_realized_c += (amt - tax) * _fx_of(a)
+            if running_shares > 0:
+                ep_cash_dividend += amt - tax
 
     # 收尾: 还停在空仓状态说明这一段确实平掉了(没有当日买回), 结算进 carry。
     # 不结算的话 realized_carry 会漏掉最后一段, 顶栏「已实现」少一块。
@@ -394,15 +401,18 @@ def compute_position_state(
 
     # 总已实现 = 已平仓段 + 当前段已实现 + 现金分红
     realized_pnl = round(realized_carry + _episode_realized() + income_realized, 2)
-    # carry = 不在当前浮动里的已实现 (已平仓段 + 分红) → 顶部总盈亏用它补, 避免和浮动重复
-    realized_carry_out = round(realized_carry + income_realized, 2)
+    total_shares = sum(l["shares"] for l in lots)
+    booked_dividend = (
+        ep_cash_dividend if total_shares > 1e-9 and use_booked_dividends and is_a_share(stock_code) else 0.0
+    )
+    # 汇总只补尚未计入持仓盈亏的已实现收益，已冲减成本的股息不再加一次。
+    realized_carry_out = round(realized_carry + income_realized - booked_dividend, 2)
     cny = {
         "realized_pnl_cny": round(realized_carry_c + _episode_realized_c() + income_realized_c, 2),
-        "realized_carry_cny": round(realized_carry_c + income_realized_c, 2),
+        "realized_carry_cny": round(realized_carry_c + income_realized_c - booked_dividend, 2),
         "realized_fx_pnl": round(fx_realized, 2),     # 人民币: 已实现里本金的汇兑部分(A 股恒 0)
     }
 
-    total_shares = sum(l["shares"] for l in lots)
     if total_shares <= 1e-9:
         return {
             "shares": 0,
@@ -431,12 +441,16 @@ def compute_position_state(
         net_cost = fifo_cost
         cost_value_cny = sum(l["shares"] * l["price"] * l["fx"] for l in lots)
 
-    # 摊薄成本(对齐券商): 持有期间累计每股现金分红从每股成本里扣
-    div_ps = max(0.0, float(cash_div_per_share or 0.0))
+    # 实收股息直接冲减总成本，每股折算值仅用于显示。
+    div_ps = 0.0 if booked_dividend else max(0.0, float(cash_div_per_share or 0.0))
     net_cost_diluted = max(0.0, net_cost - div_ps)
     fifo_cost_diluted = max(0.0, fifo_cost - div_ps)
     if div_ps:
         cost_value_cny = max(0.0, cost_value_cny - div_ps * total_shares * (_now_fx() if foreign else 1.0))
+    if booked_dividend:
+        div_ps = booked_dividend / total_shares
+        cost_value_cny -= booked_dividend
+        net_cost_diluted = cost_value_cny / total_shares
 
     # Capital-weighted days on FIFO lots (each lot has a concrete date)
     capital_days_sum = sum(
@@ -455,7 +469,7 @@ def compute_position_state(
         "total_fees": round(total_fees, 2),
         "weighted_days": int(round(weighted_days)),
         "realized_pnl": realized_pnl,
-        "realized_carry": realized_carry_out,            # 已平仓段+分红 (不在浮动里, 供顶部总盈亏补)
+        "realized_carry": realized_carry_out,            # 尚未计入当前持仓盈亏的已实现
         "income_realized": round(income_realized, 2),   # 累计现金分红 (DIVIDEND, 税后)
         "dividend_tax": round(dividend_tax, 2),         # 港美股分红预扣税累计(原币)
         "cost_value_cny": round(cost_value_cny, 2),     # 持仓成本(人民币, 按各笔成交日汇率; A 股 = 成本×股数)
@@ -474,14 +488,16 @@ def compute_position_state(
 # (曾经 realized / trade-review / today-pnl 都没走自动估费, 港美股的费用回退成默认券商方案)。
 
 async def broker_fee_resolver():
-    """一次性读券商表, 返回 (name)->(rate,min) 解析器(找不到→默认券商), 避免每笔查库。"""
+    """一次性读取券商费率。未指定券商时，A 股使用本地配置。"""
     from database import list_brokers
     brokers = await list_brokers(user_id=require_user_id())
     default = next((x for x in brokers if x.get("is_default")), None) or (brokers[0] if brokers else None)
     bymap = {x["name"]: (x["stock_rate"], x["stock_min"]) for x in brokers}
 
     def resolve(name):
-        if name and name in bymap:
+        if not name:
+            return config.commission_rate, config.commission_min
+        if name in bymap:
             return bymap[name]
         return (default["stock_rate"], default["stock_min"]) if default else (None, None)
     return resolve
@@ -525,7 +541,7 @@ async def ledger_state(code: str, actions: list | None = None, holding_broker=_U
     """一只票的账(compute_position_state 的结果), 费用与汇率都按统一口径解析好。
 
     actions 不传则读库; holding_broker 不传则读持仓行的 broker。会原地给 actions 挂 _auto_fee。
-    dilute=True 再做分红摊薄(对齐券商)。港美股没传 fx_now 时取一次当前汇率(放线程里, 不卡事件循环)。
+    dilute=True 时 A 股用当前持仓段的实收股息冲减成本。港美股没传 fx_now 时取一次当前汇率。
     """
     import asyncio
     if actions is None:
@@ -539,9 +555,5 @@ async def ledger_state(code: str, actions: list | None = None, holding_broker=_U
         from services.market_data import code_fx
         fx_now = await asyncio.to_thread(code_fx, code)
     c_rate, c_min = resolve(holding_broker)
-    st = compute_position_state(actions, stock_code=code, commission_rate=c_rate, commission_min=c_min,
-                                fx_now=fx_now)
-    if dilute:
-        from services.dividends import dilute_state
-        st = await dilute_state(code, st)
-    return st
+    return compute_position_state(actions, stock_code=code, commission_rate=c_rate, commission_min=c_min,
+                                  fx_now=fx_now, use_booked_dividends=dilute)

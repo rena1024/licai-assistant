@@ -39,7 +39,7 @@ const localTime = (market, date, t) => {
 // 提交用: 美股把美东时刻换成北京时间
 const storeTime = (market, date, t) => (market === 'US' && t && date) ? etToBjTime(date, t) : t
 const FEE_HINT = {
-  A: '按券商费率自动估算 (万1.854 / 5元起)',
+  A: '按交易券商、持仓券商或默认配置费率自动估算',
   HK: '按港股收费方案自动估算(默认盈立 PRO: 佣金 0.06% + 平台费 18 港元/单 + 印花税等法定费用), 港元',
   US: '按美股收费方案自动估算(默认盈立 PRO: 佣金 0.01 美元/股、最低 1 美元 + 平台费 0.009 美元/股、最低 2.88 美元; 卖出另加 SEC/TAF), 美元',
 }
@@ -99,7 +99,7 @@ function ActionRow({ action, editing, onSave, onCancel, onEdit, onDelete, broker
           {typesOf(market).map(t => <option key={t.value} value={t.value}>{t.label}</option>)}
         </select>
         <select className="bg-bg border border-border rounded px-1.5 py-0.5 text-[11px] mt-1 block text-text-dim w-full" value={draft.broker || ''} onChange={e => setDraft({ ...draft, broker: e.target.value })} title="本笔券商, 留空用持仓默认">
-          <option value="">默认券商</option>
+          <option value="">{market === 'A' ? '沿用持仓券商' : '默认券商'}</option>
           {brokers.map(b => <option key={b.id} value={b.name}>{b.name}</option>)}
         </select>
       </td>
@@ -277,7 +277,7 @@ export default function TransactionHistory({ stockCode, stockName, onClose, onCh
                         {typesOf(market).map(t => <option key={t.value} value={t.value}>{t.label}</option>)}
                       </select>
                       <select className="bg-bg border border-border rounded px-1.5 py-0.5 text-[11px] mt-1 block text-text-dim w-full" value={newAction.broker} onChange={e => setNewAction({ ...newAction, broker: e.target.value })} title="本笔券商, 留空用持仓默认">
-                        <option value="">默认券商</option>
+                        <option value="">{market === 'A' ? '沿用持仓券商' : '默认券商'}</option>
                         {brokers.map(b => <option key={b.id} value={b.name}>{b.name}</option>)}
                       </select>
                     </td>

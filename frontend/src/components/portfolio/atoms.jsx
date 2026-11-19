@@ -203,7 +203,7 @@ export function TypeMiniInfo({ row }) {
       <span className="text-[10.5px] text-text-muted font-mono">
         {extra.shares} 股 · {currencySymbol(extra.currency)}{fmtPrice(extra.avgCost, row.code)}
         {extra.divPerShare > 0 && (
-          <span className="text-accent/80 ml-1" title={`持有期已收每股现金分红 ${currencySymbol(extra.currency)}${extra.divPerShare}，已按券商摊薄成本口径从成本中扣减`}>
+          <span className="text-accent/80 ml-1" title={`本持仓周期的实收股息已从总成本扣减，折合当前每股 ${currencySymbol(extra.currency)}${extra.divPerShare}`}>
             含红{currencySymbol(extra.currency)}{extra.divPerShare}
           </span>
         )}

@@ -48,7 +48,7 @@ class HoldingResponse(BaseModel):
     fx_pnl: Optional[float] = None      # 港美股: 浮动盈亏里本金的汇兑部分(原币成本×现汇率 − 按成交日汇率的人民币成本)
     sector: Optional[str] = None  # 顶级行业, e.g. "有色金属" / "汽车" — 用于前端分组
     broker: Optional[str] = None
-    div_per_share: Optional[float] = None  # 持有期累计每股现金分红(已摊进 cost_price, 对齐券商摊薄成本)
+    div_per_share: Optional[float] = None  # 当前持仓周期实收股息折合当前每股金额，已从总成本扣除
     today_valid: Optional[bool] = None     # 港美股: 今日涨跌是否属于「今天」(港股看港交所交易日, 美股看那场收盘距今); A 股为 None, 前端按 A 股交易日
 
 

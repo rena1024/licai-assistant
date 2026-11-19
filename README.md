@@ -94,7 +94,7 @@ pip install -r requirements.txt
 
 # 复制配置模板
 cp config.example.py config.py
-# 按需修改: commission_rate (你的券商佣金率) / commission_min (单笔最低佣金)
+# A 股持仓选择「默认（配置费率）」时，使用 commission_rate（佣金率）和 commission_min（每笔最低佣金）
 
 # 前端构建
 cd frontend && npm install && npm run build && cd ..
@@ -104,9 +104,17 @@ python run.py
 # 访问 http://localhost:8888
 ```
 
-第一次启动会在 `runtime-data/` 创建空 SQLite (`portfolio.db`)。可通过环境变量
-`LICAI_DATA_DIR` 指定持久目录，详见[运行目录与隔离测试](docs/deployment/runtime-data.md)。
-发现项目根目录已有旧库时会停止初始化；保留旧库，显式指定新的空目录继续，不自动迁移或清空历史数据。
+默认使用项目根目录下的 `runtime-data/`，首次启动时会在其中创建 SQLite 数据库 `portfolio.db`。
+如果项目根目录还留有旧的 `portfolio.db`，直接运行 `python run.py` 会触发旧库保护并停止启动。
+如果已有兼容的 `runtime-data/portfolio.db`，在项目根目录显式指定 `runtime-data/` 即可复用其中的数据：
+
+```bash
+LICAI_DATA_DIR="$PWD/runtime-data" python run.py
+```
+
+如果需要从空库开始，可通过 `LICAI_DATA_DIR` 指定一个新的空目录。根目录的旧库可以保留。
+详见[运行目录与隔离测试](docs/deployment/runtime-data.md)。
+
 首次打开页面可凭本机一次性凭据创建管理员，再登录使用；临时密码首次登录须修改。
 登录、会话及本机恢复见[账号使用说明](docs/deployment/accounts.md)。持仓与其他资产归属已完成 A04，完整多用户业务隔离仍待 A05～A10 验收，当前开发分支尚不适合多人日常使用。
 

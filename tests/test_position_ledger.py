@@ -1,6 +1,45 @@
 """Tests for FIFO position ledger."""
 from datetime import date
+import pytest
 from services.position_ledger import compute_position_state
+
+
+@pytest.mark.parametrize("final_actions", [
+    [],
+    [("SELL", 12, 40)],
+    [("SELL", 12, 100)],
+    [("SELL", 12, 100), ("BUY", 11, 100)],
+])
+def test_booked_dividend_reconciles_with_cash_flows(final_actions):
+    actions = [
+        {"action_type": "BUY", "price": 10, "shares": 100, "fee": 5, "trade_date": "2026-01-01"},
+        {"action_type": "DIVIDEND", "price": 20, "shares": 1, "fee": 0, "trade_date": "2026-01-02"},
+    ]
+    for day, (kind, price, shares) in enumerate(final_actions, 3):
+        actions.append(dict(action_type=kind, price=price, shares=shares, fee=5, trade_date=f"2026-01-{day:02d}"))
+    state = compute_position_state(actions, stock_code="600000", use_booked_dividends=True)
+    cash = 0
+    for action in actions:
+        amount = action["price"] * action["shares"]
+        if action["action_type"] == "BUY":
+            cash -= amount + action["fee"]
+        else:
+            cash += amount - action["fee"]
+    total_pnl = state["shares"] * 11 - state["cost_value_cny"] + state["realized_carry"]
+    assert total_pnl == pytest.approx(state["shares"] * 11 + cash)
+    assert state["realized_pnl"] == compute_position_state(actions, stock_code="600000")["realized_pnl"]
+
+
+def test_same_day_rebuy_keeps_booked_dividend_in_current_cycle():
+    actions = [
+        dict(action_type="BUY", price=10, shares=100, fee=0, trade_date="2026-01-01"),
+        dict(action_type="DIVIDEND", price=20, shares=1, fee=0, trade_date="2026-01-02"),
+        dict(action_type="SELL", price=12, shares=100, fee=0, trade_date="2026-01-03"),
+        dict(action_type="BUY", price=11, shares=100, fee=0, trade_date="2026-01-03"),
+    ]
+    state = compute_position_state(actions, stock_code="600000", use_booked_dividends=True)
+    assert state["cost_value_cny"] == 880
+    assert state["realized_carry"] == 0
 
 
 def test_single_buy():

@@ -16,9 +16,8 @@ OWNED_SETTINGS_TABLES = ('alert_config', 'custom_alerts', 'unwind_plans', 'unwin
 OWNED_PORTFOLIO_TABLES = ("external_asset_actions", "position_actions", "trade_log", "external_assets", "holdings", "portfolio_snapshots", "morning_briefings")
 # 首次启动自动插入的模板不是用户配置；初始化保护据此识别被修改的无归属费率。
 DEFAULT_BROKERS = (
-    ("招商证券", 0.0001854, 5.0, 0.0001854, 5.0, 1),
-    ("银河证券", 0.000086, 5.0, 0.00005, 0.1, 0),
-    ("盈立证券", 0.0008, 0.0, 0.0008, 0.0, 0),
+    ("华泰证券", 0.0001154, 5.0, 0.0001854, 5.0, 1),
+    ("华宝证券", 0.00015, 5.0, 0.0001, 5, 0),
 )
 
 

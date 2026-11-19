@@ -271,12 +271,8 @@ def test_http_same_symbol_and_forged_owner_stay_in_session_scope(owners, monkeyp
     async def sector(code):
         return '测试行业'
 
-    async def no_dilution(code, state):
-        return state
-
     monkeypatch.setattr(portfolio, 'get_realtime_quotes', quotes)
     monkeypatch.setattr(portfolio, 'get_stock_sector', sector)
-    monkeypatch.setattr('services.dividends.dilute_state', no_dilution)
     with TestClient(app) as first, TestClient(app) as second:
         for client, username, password in [(first, 'owner-a', PASSWORD), (second, 'owner-b', 'Synthetic-password-02!')]:
             login = client.post('/api/auth/login', json={'username':username, 'password':password})

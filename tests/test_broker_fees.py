@@ -20,15 +20,72 @@ def fresh_db(monkeypatch):
     os.remove(path)
 
 
-def test_seed_creates_zhaoshang_yinhe(fresh_db):
+def test_seed_creates_brokers_from_template(fresh_db):
     rows = asyncio.run(db.list_brokers(user_id=require_user_id()))
-    names = {r["name"] for r in rows}
-    assert "招商证券" in names and "银河证券" in names
-    zs = next(r for r in rows if r["name"] == "招商证券")
-    assert abs(zs["stock_rate"] - 0.0001854) < 1e-9
-    assert zs["stock_min"] == 5 and zs["is_default"] == 1
-    yh = next(r for r in rows if r["name"] == "银河证券")
-    assert abs(yh["etf_rate"] - 0.00005) < 1e-9 and yh["etf_min"] == 0.1
+    fields = ("name", "stock_rate", "stock_min", "etf_rate", "etf_min", "is_default")
+    assert {tuple(row[field] for field in fields) for row in rows} == set(db.DEFAULT_BROKERS)
+
+
+def test_a_share_holding_uses_config_or_selected_broker(fresh_db, monkeypatch):
+    from api import portfolio_routes as routes
+
+    monkeypatch.setattr(cfg.config, "commission_rate", 0.0001154)
+    monkeypatch.setattr(cfg.config, "commission_min", 6.0)
+
+    async def quotes(_codes):
+        return {}
+
+    async def sector(_code):
+        return None
+
+    monkeypatch.setattr(routes, "get_realtime_quotes", quotes)
+    monkeypatch.setattr(routes, "get_stock_sector", sector)
+
+    async def check():
+        broker_name = "测试券商"
+        await db.add_broker(broker_name, 0.0001854, 5.0, 0.0001, 5.0, user_id=require_user_id())
+        cases = (
+            ("600000", None, 500, 0.0001154, 6.0),
+            ("600001", broker_name, 1000, 0.0001854, 5.0),
+            ("600002", None, 1000, 0.0001154, 6.0),
+        )
+        for code, broker, shares, _, _ in cases:
+            await routes.create_holding(routes.HoldingCreate(
+                stock_code=code, stock_name=code, shares=shares, cost_price=100, broker=broker,
+                trade_date="2026-08-31",
+            ))
+
+        holdings = {row.stock_code: row for row in await routes.list_holdings()}
+        for code, broker, shares, rate, minimum in cases:
+            expected = estimate_trade_fee("BUY", 100, shares, code, rate, minimum)
+            action, = await routes.list_actions(code)
+            assert action["fee_auto"] == pytest.approx(round(expected, 2))
+            assert action["broker_effective"] == broker
+            assert holdings[code].broker == broker
+            assert holdings[code].cost_price == pytest.approx(100 + expected / shares, abs=0.0001)
+
+        await routes.create_action("600001", routes.ActionCreate(
+            action_type="SELL", price=100, shares=1000, trade_date="2026-09-01",
+        ))
+        actions = await routes.list_actions("600001")
+        sale = next(action for action in actions if action["action_type"] == "SELL")
+        assert sale["broker_effective"] == broker_name
+        assert sale["fee_auto"] == pytest.approx(round(
+            estimate_trade_fee("SELL", 100, 1000, "600001", 0.0001854, 5.0), 2,
+        ))
+
+        await routes.create_holding(routes.HoldingCreate(
+            stock_code="600001", stock_name="600001", shares=1000, cost_price=100,
+            trade_date="2026-09-02",
+        ))
+        actions = await routes.list_actions("600001")
+        reentry = next(action for action in actions if action["note"] == "re-entry (auto)")
+        assert reentry["broker_effective"] is None
+        assert reentry["fee_auto"] == pytest.approx(round(
+            estimate_trade_fee("BUY", 100, 1000, "600001", 0.0001154, 6.0), 2,
+        ))
+
+    asyncio.run(check())
 
 
 from datetime import date
@@ -170,8 +227,8 @@ def test_compute_state_default_is_zhaoshang():
 
 def test_set_default_is_exclusive(fresh_db):
     rows = asyncio.run(db.list_brokers(user_id=require_user_id()))
-    yh = next(r for r in rows if r["name"] == "银河证券")
-    asyncio.run(db.update_broker(yh["id"], is_default=1, user_id=require_user_id()))
+    broker = next(r for r in rows if not r["is_default"])
+    asyncio.run(db.update_broker(broker["id"], is_default=1, user_id=require_user_id()))
     rows2 = asyncio.run(db.list_brokers(user_id=require_user_id()))
     defaults = [r for r in rows2 if r["is_default"]]
-    assert len(defaults) == 1 and defaults[0]["name"] == "银河证券"
+    assert len(defaults) == 1 and defaults[0]["id"] == broker["id"]

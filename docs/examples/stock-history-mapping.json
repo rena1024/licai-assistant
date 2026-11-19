@@ -1,0 +1,26 @@
+{
+  "broker": "示例证券",
+  "sheet": "成交明细",
+  "header_row": 2,
+  "date_format": "%Y/%m/%d",
+  "currency": "CNY",
+  "settlement_mode": "absolute",
+  "columns": {
+    "date": "成交日期",
+    "code": "股票代码",
+    "name": "股票名称",
+    "account": "证券账户",
+    "action": "业务类别",
+    "quantity": "成交股数",
+    "price": "成交价格",
+    "settlement": "结算净额",
+    "dividend_amount": "实收红利"
+  },
+  "fee_columns": ["手续费合计"],
+  "actions": {
+    "买": "BUY",
+    "卖": "SELL",
+    "派息": "DIVIDEND",
+    "银证转账": "IGNORE"
+  }
+}

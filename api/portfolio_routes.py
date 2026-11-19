@@ -61,7 +61,7 @@ class ActionUpdate(BaseModel):
 
 
 async def _default_broker_name():
-    """配置里的默认券商名(is_default), 没有则第一个。用于显示回退(选"默认券商"时也能打 tag)。"""
+    """返回账号的默认券商名，供港美股持仓和交易记录回退。"""
     brokers = await list_brokers(user_id=require_user_id())
     d = next((x for x in brokers if x.get("is_default")), None) or (brokers[0] if brokers else None)
     return d["name"] if d else None
@@ -161,7 +161,7 @@ async def list_holdings() -> list[HoldingResponse]:
         code = h["stock_code"]
         # 现算 shares/cost_price (而非读 holdings 表存的值): 综合成本法按"持仓段"
         # 计算, 清仓后复活会重置成本, 存量值可能是旧算法写的, 现算保证一致。
-        hb = h.get("broker") or default_broker_name   # 持仓未设则回退配置默认, 让"默认券商"也有 tag
+        hb = h.get("broker") or (None if is_a_share(code) else default_broker_name)
         broker_display = hb
         q = quotes.get(code)
         current_price = q["price"] if q else None
@@ -176,7 +176,7 @@ async def list_holdings() -> list[HoldingResponse]:
         if currency != "CNY" and not (q or {}).get("fx_rate"):
             fx_info = get_fx_info(currency)
         fx_rate = float(fx_info.get("rate") or 1.0)
-        cost_value_cny = None      # 港美股: 按各笔成交日汇率折的人民币成本(含本金汇兑)
+        cost_value_cny = None      # A 股账本总成本，港美股按各笔成交日汇率折算
         try:
             _acts = await get_position_actions(code, limit=500, user_id=require_user_id())
             if _acts:
@@ -184,8 +184,7 @@ async def list_holdings() -> list[HoldingResponse]:
                                          fx_now=fx_rate if currency != "CNY" else None)
                 h["shares"] = _st["shares"]
                 h["cost_price"] = _st["cost_price"]
-                if currency != "CNY":
-                    cost_value_cny = _st.get("cost_value_cny")
+                cost_value_cny = _st.get("cost_value_cny")
                 if _st.get("div_per_share"):
                     h["div_per_share"] = _st["div_per_share"]
                 # 主行券商: 显示当前持仓段实际用的(单一→该券商, 多个→"多券商")
@@ -204,10 +203,12 @@ async def list_holdings() -> list[HoldingResponse]:
         pnl_pct = None
         market_value = None
         original_cost_value = round(h["cost_price"] * h["shares"], 2)
+        if currency == "CNY" and cost_value_cny is not None:
+            original_cost_value = cost_value_cny
         original_market_value = None
         cost_value = round(original_cost_value * fx_rate, 2)
         fx_pnl = None
-        if cost_value_cny is not None and h["shares"]:
+        if currency != "CNY" and cost_value_cny is not None and h["shares"]:
             # 成本按成交日汇率: 浮动盈亏 = 现市值(现汇率) − 人民币成本, 其中本金汇兑 = 原币成本 × 现汇率 − 人民币成本
             fx_pnl = round(cost_value - cost_value_cny, 2)
             cost_value = round(cost_value_cny, 2)
@@ -216,7 +217,9 @@ async def list_holdings() -> list[HoldingResponse]:
             market_value = round(original_market_value * fx_rate, 2)
             unrealized_pnl = (round(market_value - cost_value, 2) if cost_value_cny is not None
                               else round((original_market_value - original_cost_value) * fx_rate, 2))
-            if h["cost_price"] > 0:
+            if currency == "CNY" and original_cost_value > 0:
+                pnl_pct = round((original_market_value - original_cost_value) / original_cost_value * 100, 2)
+            elif h["cost_price"] > 0:
                 pnl_pct = round((current_price - h["cost_price"]) / h["cost_price"] * 100, 2)
 
         result.append(HoldingResponse(
@@ -284,12 +287,11 @@ async def realized_pnl():
         foreign = code_currency(code) != "CNY"
         fx = await asyncio.to_thread(code_fx, code) if foreign else 1.0
         state = await ledger_state(code, actions, (holdings_map.get(code) or {}).get("broker"),
-                                   resolve=resolve, fee_overrides=fee_overrides, dilute=False,
+                                   resolve=resolve, fee_overrides=fee_overrides,
                                    fx_now=fx if foreign else None)
         rp_native = float(state.get("realized_pnl") or 0)
         rp = float(state.get("realized_pnl_cny") or 0) if foreign else rp_native
-        # carry = 不在当前浮动里的已实现 (已平仓段 + 分红). 当前持仓段的已实现已被
-        # 综合成本法摊进浮动盈亏, 顶部总盈亏只能加 carry, 否则重复算。
+        # 只汇总尚未计入持仓盈亏的已实现，例如历史清仓段及未冲减成本的股息。
         carry = float(state.get("realized_carry_cny") or 0) if foreign else float(state.get("realized_carry") or 0)
         total += rp
         total_carry += carry
@@ -1577,9 +1579,9 @@ async def create_holding(data: HoldingCreate):
         await update_holding(stock_code, stock_name=name, user_id=require_user_id())
     else:
         await add_holding(stock_code, name, data.shares, data.cost_price, user_id=require_user_id())
-    # 1b) 如果前端传了券商, 在 recompute 之前写入, 这样 _recompute_holding 能用正确的费率
-    if data.broker:
-        await update_holding(stock_code, broker=data.broker, user_id=require_user_id())
+    # A 股清仓后重新建仓时，选择默认需要清除上一次绑定的券商。
+    if data.broker or (existing and is_a_share(stock_code)):
+        await update_holding(stock_code, broker=data.broker or "", user_id=require_user_id())
     # 2) 写一笔 BUY action,然后重算综合成本 (会自动加佣金/印花税/过户费)
     await add_position_action(
         stock_code, "BUY", data.cost_price, data.shares,
@@ -1652,7 +1654,7 @@ async def list_actions(stock_code: str):
     actions = await get_position_actions(stock_code, limit=500, user_id=require_user_id())
     is_a = stock_code and not stock_code.upper().startswith(("HK.", "US."))
     h = await get_holding(stock_code, user_id=require_user_id())
-    hb = (h or {}).get("broker") or await _default_broker_name()   # 未指定→持仓→配置默认, 让默认也有 tag
+    hb = (h or {}).get("broker") or (None if is_a else await _default_broker_name())
     resolve = await _broker_fee_resolver()
     # 估算费用走 _attach_auto_fees(内部按「委托单」合并 5 元最低佣金再分摊)。
     # 这里曾经自己逐笔调 estimate_trade_fee, 于是一张委托分两笔成交时列表显示

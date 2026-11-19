@@ -134,8 +134,8 @@ export function AddAShareForm({ initialMarket = 'A', onDone, onCancel, brokers =
       </div>
       <div className="flex flex-col gap-1">
         <label className="text-[11px] text-text-dim">券商</label>
-        <select className={`${inp} w-28`} value={broker} onChange={e => setBroker(e.target.value)}>
-          <option value="">默认</option>
+        <select className={`${inp} ${market === 'A' ? 'w-40' : 'w-28'}`} value={broker} onChange={e => setBroker(e.target.value)}>
+          <option value="">{market === 'A' ? '默认（配置费率）' : '默认'}</option>
           {brokers.map(b => <option key={b.id} value={b.name}>{b.name}</option>)}
         </select>
       </div>
