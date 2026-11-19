@@ -22,6 +22,13 @@ _candidate = ContextVar('llm_candidate',default=None)
 _workers = set()
 _previous_failures = ContextVar('llm_previous_failures',default='')
 
+# 固定官方 HTTPS 域名使用正常证书校验，域名交给连接层处理以兼容代理 Fake-IP。
+# 自定义地址仍需检查全部解析结果并固定连接 IP；不接受后缀匹配或非标准端口。
+_OFFICIAL_API_HOSTS = frozenset({
+    'api.deepseek.com', 'api.anthropic.com', 'api.openai.com',
+    'dashscope.aliyuncs.com', 'generativelanguage.googleapis.com',
+})
+
 
 class TransportError(LLMError):
     def __init__(self,code,*,known_unbilled=False):
@@ -45,32 +52,39 @@ def _read_body(response,*,deadline,maximum=8*1024*1024):
     return b''.join(chunks)
 
 
+def _connection_base(session, model, u):
+    if (not model.local and u.scheme == 'https' and u.port in {None, 443}
+            and u.hostname in _OFFICIAL_API_HOSTS):
+        return model.endpoint.rstrip('/')
+    addresses=socket.getaddrinfo(u.hostname,u.port or (443 if u.scheme=='https' else 80),type=socket.SOCK_STREAM)
+    if not addresses:raise TransportError('endpoint_unresolved',known_unbilled=True)
+    ips=[ipaddress.ip_address(a[4][0]) for a in addresses]
+    if not model.local and any(not ip.is_global for ip in ips):
+        raise TransportError('private_endpoint',known_unbilled=True) from None
+    if model.local and u.hostname!='host.docker.internal' and any(not ip.is_loopback for ip in ips):
+        raise LLMError('local_endpoint_invalid','本地端点解析到非本机地址')
+    # 固定已校验 IP，TLS 仍验证原域名，阻止校验后再次解析产生 DNS 重绑定。
+    original_host=u.hostname
+    if u.scheme=='https':
+        class PinnedAdapter(requests.adapters.HTTPAdapter):
+            def init_poolmanager(self,*args,**kwargs):
+                kwargs.update(assert_hostname=original_host,server_hostname=original_host)
+                return super().init_poolmanager(*args,**kwargs)
+            def proxy_manager_for(self,proxy,**kwargs):
+                kwargs.update(assert_hostname=original_host,server_hostname=original_host)
+                return super().proxy_manager_for(proxy,**kwargs)
+        session.mount('https://',PinnedAdapter(max_retries=0))
+    ip=str(ips[0]);host=f'[{ip}]' if ':' in ip else ip
+    return f'{u.scheme}://{host}:{u.port or (443 if u.scheme=="https" else 80)}{u.path.rstrip("/")}'
+
+
 def send_http(model,payload,path,headers):
     """单次发送；不使用环境代理、HTTP 重定向或库级自动重试。"""
     started=time.monotonic()
     with requests.Session() as session:
         session.trust_env=False
         u=urlsplit(model.endpoint)
-        addresses=socket.getaddrinfo(u.hostname,u.port or (443 if u.scheme=='https' else 80),type=socket.SOCK_STREAM)
-        if not addresses:raise TransportError('endpoint_unresolved',known_unbilled=True)
-        ips=[ipaddress.ip_address(a[4][0]) for a in addresses]
-        if not model.local and any(not ip.is_global for ip in ips):
-            raise TransportError('private_endpoint',known_unbilled=True) from None
-        if model.local and u.hostname!='host.docker.internal' and any(not ip.is_loopback for ip in ips):
-            raise LLMError('local_endpoint_invalid','本地端点解析到非本机地址')
-        # 固定已校验 IP，TLS 仍验证原域名，阻止校验后再次解析产生 DNS 重绑定。
-        original_host=u.hostname
-        if u.scheme=='https':
-            class PinnedAdapter(requests.adapters.HTTPAdapter):
-                def init_poolmanager(self,*args,**kwargs):
-                    kwargs.update(assert_hostname=original_host,server_hostname=original_host)
-                    return super().init_poolmanager(*args,**kwargs)
-                def proxy_manager_for(self,proxy,**kwargs):
-                    kwargs.update(assert_hostname=original_host,server_hostname=original_host)
-                    return super().proxy_manager_for(proxy,**kwargs)
-            session.mount('https://',PinnedAdapter(max_retries=0))
-        ip=str(ips[0]);host=f'[{ip}]' if ':' in ip else ip
-        base=f'{u.scheme}://{host}:{u.port or (443 if u.scheme=="https" else 80)}{u.path.rstrip("/")}'
+        base=_connection_base(session,model,u)
         headers={**headers,'Host':u.netloc}
         from services.proxy_config import get_proxy
         proxy=get_proxy()
