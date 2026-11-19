@@ -38,6 +38,9 @@ _ERRORS = {
     "invalid_password": (422, "密码长度须为 4～128 个字符"),
     "username_taken": (409, "账号名已存在"),
     "account_missing": (404, "账号不存在"),
+    "user_active": (409, "请先停用该账号，再删除个人数据"),
+    "confirmation_mismatch": (422, "确认用户名不匹配，请完整输入要删除的用户名"),
+    "user_busy": (409, "该账号仍有任务或请求正在结束，请稍后重试删除"),
 }
 
 # 公开行情缓存不属于初始化拦截范围；自动生成的券商模板也不是用户业务。
@@ -299,7 +302,7 @@ async def reset_user_password(*, actor_id: int, user_id: int, password: str, now
     _validate_password(password)
     async with _transaction("password_reset", now=now, actor_id=actor_id, target_id=user_id) as db:
         await _require_admin(db, actor_id)
-        target = await (await db.execute("SELECT role FROM users WHERE id=?", (user_id,))).fetchone()
+        target = await (await db.execute("SELECT role FROM users WHERE id=? AND id NOT IN (SELECT user_id FROM account_deletions)", (user_id,))).fetchone()
         if not target:
             raise AccountError("account_missing")
         if target["role"] == "admin":
@@ -328,7 +331,7 @@ async def list_users(*, actor_id: int) -> list[Account]:
     db = await get_db()
     try:
         await _require_admin(db, actor_id)
-        rows = await (await db.execute('SELECT * FROM users ORDER BY id')).fetchall()
+        rows = await (await db.execute('SELECT * FROM users WHERE id NOT IN (SELECT user_id FROM account_deletions) ORDER BY id')).fetchall()
         return [_account(row) for row in rows]
     finally:
         await db.close()
@@ -337,7 +340,7 @@ async def list_users(*, actor_id: int) -> list[Account]:
 async def set_user_active(*, actor_id: int, user_id: int, active: bool) -> Account:
     async with _transaction('user_enabled' if active else 'user_disabled', now=None, actor_id=actor_id, target_id=user_id) as db:
         await _require_admin(db, actor_id)
-        row = await (await db.execute('SELECT * FROM users WHERE id=?', (user_id,))).fetchone()
+        row = await (await db.execute('SELECT * FROM users WHERE id=? AND id NOT IN (SELECT user_id FROM account_deletions)', (user_id,))).fetchone()
         if not row:
             raise AccountError('account_missing')
         if row['role'] == 'admin':
@@ -365,3 +368,8 @@ async def set_user_active(*, actor_id: int, user_id: int, active: bool) -> Accou
         from api.ws import disconnect_user
         await disconnect_user(user_id)
     return result
+
+
+async def delete_user(*, actor_id: int, user_id: int, confirmation_username: str) -> dict:
+    from services.account_deletion import delete_user as remove
+    return await remove(actor_id=actor_id, user_id=user_id, confirmation_username=confirmation_username)

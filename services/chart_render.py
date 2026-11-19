@@ -222,6 +222,8 @@ def save_png(png: bytes) -> str:
     from services.runtime_state import check_generation,file_lock
     with file_lock:
         check_generation()
+        from services.task_context import ensure_active_sync
+        ensure_active_sync()
         with get_runtime_paths().file("media", f"{require_user_id()}/{name}").open("xb") as f:
             f.write(png)
     return f"/api/ask/image/{name}"

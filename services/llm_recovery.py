@@ -7,17 +7,20 @@ from services.local_queue import SCHEMA as QUEUE_SCHEMA
 
 def preserve_finance(current, restored):
     # 旧恢复点可能早于 B；只新增表，不修改业务 schema。
+    from services.account_deletion import SCHEMA as DELETION_SCHEMA
+    restored.executescript(DELETION_SCHEMA)
     restored.executescript(MODEL_SCHEMA + BUDGET_SCHEMA + QUEUE_SCHEMA)
     restored.execute("UPDATE llm_local_jobs SET status='interrupted' WHERE status IN ('queued','running')")
     restored.execute("INSERT OR REPLACE INTO runtime_metadata VALUES ('llm_schema_version','1')")
     if not current.execute("SELECT 1 FROM sqlite_master WHERE name='llm_attempts'").fetchone():
         return
     identities = dict(restored.execute('SELECT uuid,id FROM users'))
+    deleted = {row[0] for row in restored.execute('SELECT user_id FROM account_deletions')}
     old_ids = dict(current.execute('SELECT id,uuid FROM users'))
     # 两个版本都坚持仅本地时才有意义；恢复不得放宽恢复前的安全偏好。
     for uid,scenes in current.execute('SELECT user_id,scenes FROM llm_preferences WHERE local_only=1'):
         target = identities.get(old_ids.get(uid))
-        if target:
+        if target and target not in deleted:
             restored.execute('INSERT INTO llm_preferences VALUES (?,1,1,?) ON CONFLICT(user_id) DO UPDATE SET local_only=1,version=version+1', (target,scenes))
     # 账本独立保留，不随旧备份回退。重叠 ID 使用恢复前事实，仍在途的尝试转待核实。
     columns = [r[1] for r in current.execute('PRAGMA table_info(llm_attempts)')]

@@ -4,11 +4,11 @@ from __future__ import annotations
 import aiosqlite
 
 
-ACTIONS = frozenset({"configuration_changed", "backup_created", "backup_failed", "restore_completed", "restore_failed", "trace_changed", "retention_completed", "user_enabled", "user_disabled", "bootstrap_issued", "bootstrap_completed", "user_created", "password_recovered", "password_reset", "login", "logout", "password_changed"})
+ACTIONS = frozenset({"configuration_changed", "backup_created", "backup_failed", "restore_completed", "restore_failed", "trace_changed", "retention_completed", "user_enabled", "user_disabled", "user_deleted", "bootstrap_issued", "bootstrap_completed", "user_created", "password_recovered", "password_reset", "login", "logout", "password_changed"})
 OUTCOMES = frozenset({"success", "denied"})
 REASONS = frozenset({"", "bootstrap_closed", "invalid_bootstrap", "expired_bootstrap", "bootstrap_missing",
                      "legacy_data", "forbidden", "invalid_username", "invalid_password", "username_taken",
-                     "account_missing", "bootstrap_file", "unauthenticated", "invalid_credentials", "password_unchanged"})
+                     "account_missing", "user_active", "confirmation_mismatch", "user_busy", "bootstrap_file", "unauthenticated", "invalid_credentials", "password_unchanged"})
 
 
 async def record(db: aiosqlite.Connection, *, action: str, outcome: str,

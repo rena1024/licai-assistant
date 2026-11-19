@@ -50,6 +50,8 @@ def _persist_images(meta: Optional[dict]) -> Optional[dict]:
                 from services.runtime_state import check_generation,file_lock
                 with file_lock:
                     check_generation()
+                    from services.task_context import ensure_active_sync
+                    ensure_active_sync()
                     with get_runtime_paths().file("media", f"{require_user_id()}/{name}").open("xb") as f:
                         f.write(base64.b64decode(b64))
                 out.append(f"/api/ask/image/{name}")

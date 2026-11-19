@@ -7,6 +7,8 @@ from services import runtime_state,backup,audit,logging_config
 async def maintenance_once(*,startup=False,now=None):
     now=int(time.time() if now is None else now)
     with runtime_state.runtime_scope():
+        from services.account_deletion import retry_pending_cleanups
+        await retry_pending_cleanups()
         previous=runtime_state.read_state()
         from services.notifications import system_event,cleanup
         try:

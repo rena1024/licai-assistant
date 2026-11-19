@@ -57,5 +57,8 @@ def test_provider_code_removal_is_admin_only_but_personal_clear_is_allowed(owner
         assert client.post('/api/settings/provider',json={'spec':''}).status_code==403
         result=client.post('/api/auth/login',json={'username':'owner-a','password':'Synthetic-password-01!'})
         client.headers['X-CSRF-Token']=result.json()['csrf_token']
+        # 管理员在个人设置清凭证时，也不能卸掉所有账号共用的插件。
+        assert client.delete('/api/settings/provider?credentials_only=true').status_code==200
+        assert asyncio.run(db.get_config('market_provider'))=='missing.module:Provider'
         assert client.delete('/api/settings/provider').status_code==200
         assert asyncio.run(db.get_config('market_provider'))==''

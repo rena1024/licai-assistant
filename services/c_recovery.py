@@ -5,17 +5,24 @@ from services.data_sources import SCHEMA as SOURCE_SCHEMA
 
 
 def preserve_data_controls(current,restored):
+    # 清理任务仅来自恢复点自身，不把当前账号的待删目录套用到恢复后的账号。
+    from services.account_deletion import SCHEMA as DELETION_SCHEMA
+    restored.executescript(DELETION_SCHEMA)
     restored.executescript(SEARCH_SCHEMA+NOTIFICATION_SCHEMA+SOURCE_SCHEMA)
+    from services.account_deletion import WRITE_GUARDS
+    restored.executescript(WRITE_GUARDS)
     old_ids=dict(current.execute('SELECT id,uuid FROM users'))
     identities=dict(restored.execute('SELECT uuid,id FROM users'))
+    deleted={row[0] for row in restored.execute('SELECT user_id FROM account_deletions')}
+    private_identities={identity:uid for identity,uid in identities.items() if uid not in deleted}
     tables={r[0] for r in current.execute("SELECT name FROM sqlite_master WHERE type='table'")}
     if 'search_preferences' in tables:
         for uid,enabled in current.execute('SELECT user_id,enabled FROM search_preferences WHERE enabled=0'):
-            target=identities.get(old_ids.get(uid))
+            target=private_identities.get(old_ids.get(uid))
             if target:
                 restored.execute('INSERT OR REPLACE INTO search_preferences VALUES (?,0)',(target,))
     for uid,value in current.execute("SELECT user_id,value FROM user_settings WHERE key='notification_legacy_imported'"):
-        target=identities.get(old_ids.get(uid))
+        target=private_identities.get(old_ids.get(uid))
         if target:
             restored.execute("INSERT OR REPLACE INTO user_settings VALUES (?,'notification_legacy_imported',?)",(target,value))
     if 'search_credits' in tables:
@@ -36,7 +43,7 @@ def preserve_data_controls(current,restored):
             owner=columns.index('user_id')
             for values in current.execute(f'SELECT * FROM {table}').fetchall():
                 row=list(values)
-                row[owner]=identities.get(old_ids.get(row[owner]))
+                row[owner]=private_identities.get(old_ids.get(row[owner]))
                 if row[owner]:
                     restored.execute(f"INSERT OR REPLACE INTO {table} ({','.join(columns)}) VALUES ({','.join('?' for _ in columns)})",row)
         for row in current.execute('SELECT * FROM notification_channel_versions'):

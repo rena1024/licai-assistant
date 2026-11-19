@@ -73,7 +73,7 @@ def _replace_current(point,actor_id):
                 restored.execute('UPDATE users SET auth_version=auth_version+1')
                 restored.execute("UPDATE ask_run SET status='interrupted' WHERE status='running'")
                 restored.execute("DELETE FROM user_settings WHERE key='automatic_ai_enabled'")
-                for uid,identity in restored.execute('SELECT id,uuid FROM users').fetchall():
+                for uid,identity in restored.execute('SELECT id,uuid FROM users WHERE id NOT IN (SELECT user_id FROM account_deletions)').fetchall():
                     if identity in local:
                         restored.execute("INSERT INTO user_settings(user_id,key,value) VALUES (?,'ai_mode','local_only') ON CONFLICT(user_id,key) DO UPDATE SET value='local_only'",(uid,))
                 restored.commit()

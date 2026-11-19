@@ -11,7 +11,8 @@ _lock = file_lock
 
 
 def _path():
-    return get_runtime_paths().file('config', f'users/{require_user_id()}/connections.json')
+    paths = get_runtime_paths()
+    return paths.validate(paths.config / 'users' / str(require_user_id()) / 'connections.json')
 
 
 def get(name: str, default=None):
@@ -26,7 +27,10 @@ def get(name: str, default=None):
 def save(name: str, value):
     with _lock:
         check_generation()
+        from services.task_context import ensure_active_sync
+        ensure_active_sync()
         path = _path()
+        path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
         values = json.loads(path.read_text()) if path.exists() else {}
         values[name] = value
         descriptor, temporary = tempfile.mkstemp(dir=path.parent, prefix='.connections-')

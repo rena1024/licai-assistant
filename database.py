@@ -603,6 +603,8 @@ async def init_db():
                 raise RuntimePathError("账号数据库版本不兼容，停止初始化")
         old_tables = await _portfolio_upgrade_tables(db)
         await db.executescript(ACCOUNT_SCHEMA)
+        from services.account_deletion import SCHEMA as DELETION_SCHEMA
+        await db.executescript(DELETION_SCHEMA)
         drops = ''.join(f'DROP TABLE "{table}";\n' for table in old_tables)
         await db.executescript('BEGIN IMMEDIATE;\n' + drops + SCHEMA + '\nCOMMIT;')
         from services.model_catalog import SCHEMA as MODEL_SCHEMA
@@ -620,6 +622,8 @@ async def init_db():
         await db.executescript(SEARCH_SCHEMA)
         from services.local_queue import SCHEMA as QUEUE_SCHEMA
         await db.executescript(QUEUE_SCHEMA)
+        from services.account_deletion import WRITE_GUARDS
+        await db.executescript(WRITE_GUARDS)
         await db.execute('CREATE TABLE IF NOT EXISTS runtime_metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL)')
         llm_version = await (await db.execute("SELECT value FROM runtime_metadata WHERE key='llm_schema_version'")).fetchone()
         if llm_version and llm_version[0] != '1':

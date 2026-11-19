@@ -16,8 +16,9 @@ with tempfile.TemporaryDirectory(prefix='licai-model-browser-') as directory:
     async def prepare():
         await init_db()
         token = await accounts.issue_bootstrap_token()
-        await accounts.bootstrap_admin(token=token.read_text().strip(), username='model-tester',
-                                       password='Synthetic-model-test-01!')
+        admin = await accounts.bootstrap_admin(token=token.read_text().strip(), username='model-tester',
+                                               password='Synthetic-model-test-01!')
+        await accounts.create_user(actor_id=admin.id, username='scroll-user', password='Synthetic-scroll-01!')
 
     asyncio.run(prepare())
     from services import llm_runtime

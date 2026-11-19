@@ -161,6 +161,10 @@ def test_media_and_cache_writes_use_runtime_directory(tmp_path, monkeypatch):
 
     monkeypatch.setenv("LICAI_DATA_DIR", str(tmp_path))
     monkeypatch.setattr(fund_nav_model, "_models", {"synthetic": {"value": 1}})
+    from database import init_db
+    from tests.account_helpers import seed_owner
+    asyncio.run(init_db())
+    asyncio.run(seed_owner())
     url = chart_render.save_png(b"synthetic-chart")
     assert (tmp_path / "media" / "1" / url.rsplit("/", 1)[-1]).read_bytes() == b"synthetic-chart"
     meta = _persist_images({"images": ["data:image/png;base64,dGVzdA=="]})
