@@ -2,8 +2,8 @@
 
 class AIUnavailable(RuntimeError):
     code='controlled_ai_not_ready'
-    def __init__(self):
-        super().__init__('受控 AI 尚未开放，当前可继续使用行情、资讯和手工理财功能')
+    def __init__(self, message='受控 AI 尚未开放，当前可继续使用行情、资讯和手工理财功能'):
+        super().__init__(message)
 
 
 def require_controlled_ai():
@@ -18,6 +18,10 @@ async def require_route_ready(path):
              else 'sector' if '/sector/' in path else 'rules')
     required = {'text','tools'} if scene=='ask' else {'text'}
     if path == '/api/settings/llm/test' or not await candidates(scene,required):
+        if scene == 'ask':
+            if await candidates(scene, {'text'}):
+                raise AIUnavailable('问答模型未开放工具调用能力，无法启动分析。请到管理 → 模型服务，为问答候选模型开放“工具”能力并测试，再重试。')
+            raise AIUnavailable('问答场景没有可用模型。请到设置 → 模型偏好，选择支持“文本”和“工具”能力的问答主模型；确认模型已启用，且符合“仅本地”模式限制。')
         raise AIUnavailable()
 
 

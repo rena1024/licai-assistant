@@ -12,7 +12,8 @@ class ModelRequest(BaseModel):
     system: str = ''
     tools: list[dict] = Field(default_factory=list)
     response_schema: dict | None = None
-    output_limit: int = Field(default=2048, ge=1, le=8192)
+    # None 表示由受支持的模型服务决定输出额度。
+    output_limit: int | None = Field(default=2048, ge=1, le=8192)
     capability: set[Capability] = Field(default_factory=lambda: {'text'})
 
     def required_capabilities(self):
@@ -62,6 +63,7 @@ class ModelResult:
 
 
 class LLMError(RuntimeError):
-    def __init__(self, code, message=None):
+    def __init__(self, code, message=None, *, failure_codes=()):
         self.code = code
+        self.failure_codes = tuple(failure_codes)
         super().__init__(message or code)

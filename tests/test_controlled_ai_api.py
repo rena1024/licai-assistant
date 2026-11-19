@@ -180,3 +180,97 @@ def test_deleted_model_preserves_unknown_reservation_and_late_reconciliation(own
             assert report['budget']['user']['day']['reserved'] == 0
             assert report['budget']['user']['day']['spent'] == budget.cost_micro(PRICE, Usage(input_tokens=10, output_tokens=1))
     asyncio.run(exercise())
+
+
+def test_cloud_capability_check_explains_pause_without_sending(owners, monkeypatch):
+    from run import app
+    from services import llm_runtime, runtime_state
+    a, b, _ = owners
+    asyncio.run(configure(a, b))
+    runtime_state.update_state(cloud_hold=True)
+    def no_send(*args):
+        raise AssertionError('暂停时不得向厂商发请求')
+    monkeypatch.setattr(llm_runtime, 'send_http', no_send)
+    with TestClient(app) as client:
+        login(client, 'owner-a', 'Synthetic-password-01!')
+        response = client.post('/api/models/cloud/test', json={'capability': 'text'})
+        assert response.status_code == 409
+        assert '云端调用已暂停' in response.json()['detail']
+        model = next(m for m in client.get('/api/models').json()['models'] if m['id'] == 'cloud')
+        assert '云端调用已暂停' in model['checks'][0]['reason']
+        assert client.get('/api/usage?subject=0').json()['pending'] == []
+
+
+def test_cloud_key_is_redacted_and_retained_when_edit_is_blank(owners):
+    from run import app
+    from tests.test_budget_ledger import PRICE
+    import sqlite3
+    _, _, path = owners
+    payload = dict(id='key-test', protocol='deepseek', endpoint='https://api.deepseek.com',
+                   model='synthetic', api_key='synthetic-private-key', price=PRICE, expected_version=0)
+    with TestClient(app) as client:
+        login(client, 'owner-a', 'Synthetic-password-01!')
+        for version, key in [(0, 'synthetic-private-key'), (1, ''), (2, 'synthetic-replacement-key')]:
+            response = client.put('/api/models', json={**payload, 'expected_version': version, 'api_key': key})
+            assert response.status_code == 200
+            assert response.json()['has_key'] is True
+            assert 'api_key' not in response.json()
+            listed = client.get('/api/models')
+            assert 'synthetic-private-key' not in listed.text and 'synthetic-replacement-key' not in listed.text
+            with sqlite3.connect(path) as db:
+                import json
+                stored = json.loads(db.execute("SELECT config FROM llm_models WHERE id='key-test'").fetchone()[0])
+                assert stored['api_key'] == ('synthetic-replacement-key' if version == 2 else 'synthetic-private-key')
+
+
+def test_capability_failure_reason_does_not_echo_untrusted_details():
+    from api.model_routes import _capability_error_reason
+    from services.llm_types import LLMError
+    error = LLMError('all_candidates_failed', 'synthetic-secret',
+                     failure_codes=['unknown-synthetic-secret', 'cloud_held'])
+    reason = _capability_error_reason(error)
+    assert '云端调用已暂停' in reason
+    assert 'synthetic-secret' not in reason
+    assert 'synthetic-secret' not in _capability_error_reason(LLMError('unknown', 'synthetic-secret'))
+
+
+def test_capability_failure_explains_nonpublic_dns_address():
+    from api.model_routes import _capability_error_reason
+    from services.llm_types import LLMError
+    reason = _capability_error_reason(LLMError('all_candidates_failed', failure_codes=['private_endpoint']))
+    assert '非公网地址' in reason
+    assert 'Fake-IP' in reason
+
+
+def test_capability_check_explains_disabled_model_without_sending(owners, monkeypatch):
+    from run import app
+    from services import llm_runtime
+    a, b, _ = owners
+    asyncio.run(configure(a, b))
+    def no_send(*args):
+        raise AssertionError('停用时不得向厂商发请求')
+    monkeypatch.setattr(llm_runtime, 'send_http', no_send)
+    with TestClient(app) as client:
+        login(client, 'owner-a', 'Synthetic-password-01!')
+        model = next(m for m in client.get('/api/models').json()['models'] if m['id'] == 'cloud')
+        assert client.patch('/api/models/cloud', json={'enabled': False, 'expected_version': model['version']}).status_code == 200
+        response = client.post('/api/models/cloud/test', json={'capability': 'text'})
+        assert response.status_code == 409
+        assert '模型已停用或未开放所测能力' in response.json()['detail']
+
+
+def test_capability_check_requires_monthly_budget_without_sending(owners, monkeypatch):
+    from run import app
+    from services import llm_runtime
+    a, b, _ = owners
+    asyncio.run(configure(a, b))
+    def no_send(*args):
+        raise AssertionError('月额度未配置时不得向厂商发请求')
+    monkeypatch.setattr(llm_runtime, 'send_http', no_send)
+    with TestClient(app) as client:
+        login(client, 'owner-a', 'Synthetic-password-01!')
+        assert client.put('/api/usage/limits', json={'subject': 0, 'day': '100', 'month': None}).status_code == 200
+        response = client.post('/api/models/cloud/test', json={'capability': 'text'})
+        assert response.status_code == 409
+        assert '日额度和月额度均须大于 0' in response.json()['detail']
+        assert client.get('/api/usage?subject=0').json()['pending'] == []

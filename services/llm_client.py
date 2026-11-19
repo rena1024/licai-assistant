@@ -21,7 +21,16 @@ class ModelText(str):
 
 class ErrorText(str):
     def __new__(cls,error):
-        value=super().__new__(cls,str(error))
+        reasons = {
+            'budget_exhausted': '云端预算不足，本次模型请求未发送。请求预留费用超过全局或个人的日／月剩余额度；请到管理 → 用量与预算检查额度、已用费用和在途预留。',
+            'budget_unconfigured': '云端预算未配置或为零，本次模型请求未发送。请到管理 → 用量与预算，由管理员补齐全局和个人的日／月额度。',
+            'context_limit': '请求（含历史和工具定义）超过模型配置的上下文限制，本次模型请求未发送。请在管理 → 模型服务中，按模型实际支持的上限调整上下文配置，或新建对话减少历史后重试。',
+            'provider_transport_error': '模型连接失败或等待响应超时，当前尝试已结束；请检查模型服务和网络。云端请求请先查看用量状态，再决定是否重试。',
+            'provider_total_timeout': '等待模型完整响应超时，当前尝试已结束；云端请求请先查看用量状态，再决定是否重试。',
+        }
+        codes = getattr(error, 'failure_codes', ()) or (getattr(error, 'code', ''),)
+        messages = list(dict.fromkeys(reasons.get(code, code) for code in codes))
+        value=super().__new__(cls,'；'.join(messages) if any(code in reasons for code in codes) else str(error))
         value.code=getattr(error,'code','provider_error')
         return value
 

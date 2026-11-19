@@ -1,8 +1,9 @@
 import { apiFetch } from '../hooks/sessionRuntime'
 import { useState, useEffect, useRef } from 'react'
 import { createPortal } from 'react-dom'
-import { MiniMarkdown, SourcesBlock, ToolCallStrip, AnswerVersions, applyAnswerVersion, startRun, startDeepDive, followRun, liveRuns, cancelRun } from './askShared'
+import { MiniMarkdown, SourcesBlock, ToolCallStrip, AnswerVersions, AnswerProgress, applyAnswerVersion, startRun, startDeepDive, followRun, liveRuns, cancelRun } from './askShared'
 import ImageZoom from './ImageZoom'
+import useLLMStatus from '../hooks/useLLMStatus'
 
 function pctColor(v) {
   if (v > 0) return 'text-bear'
@@ -54,6 +55,8 @@ export default function StockAskModal({ stock, onClose, initialQuestion = '' }) 
   const closeTimer = useRef(null)
   const sessionId = useRef(DRAWER_CACHE.get(stock?.code)?.sessionId ?? null)   // 落库用: 同一只票接着同一条会话
   const runRef = useRef(DRAWER_CACHE.get(stock?.code)?.run ?? null)            // {id, cursor}: 关了再开接着看
+  const [activeRunId, setActiveRunId] = useState(DRAWER_CACHE.get(stock?.code)?.run?.id || '')
+  const llm = useLLMStatus(loading, { taskId: activeRunId })
   const scope = `stock:${stock?.code || ''}`
 
   // 先播放滑出动画再卸载
@@ -132,6 +135,7 @@ export default function StockAskModal({ stock, onClose, initialQuestion = '' }) 
 
   // 跟看一条 run。关抽屉只 abort 这根连接, run 在服务端照跑照落库。
   const attach = (runId, cursor = 0) => {
+    setActiveRunId(runId)
     abortRef.current?.abort()
     const ctrl = new AbortController(); abortRef.current = ctrl
     runRef.current = { id: runId, cursor }
@@ -316,6 +320,7 @@ export default function StockAskModal({ stock, onClose, initialQuestion = '' }) 
               <div className="text-[12px] text-text-bright bg-surface-3 rounded-lg px-3 py-1.5 inline-block">{it.q}</div>
               <div className="mt-2 px-3 py-2.5 rounded-lg bg-accent/8 border border-accent/25">
                 <AnswerVersions turn={it} />
+                <AnswerProgress turn={it} active={loading && i === history.length - 1} label={llm.label} />
                 <ToolCallStrip steps={it.steps} settled={it.answer != null || it.done} />
                 {(it.charts || []).length > 0 && (
                   <div className="flex flex-col gap-2 mb-2">
@@ -328,7 +333,7 @@ export default function StockAskModal({ stock, onClose, initialQuestion = '' }) 
                 {it.err
                   ? <div className="text-[11.5px] text-bull-bright">出错: {it.err}</div>
                   : it.answer == null
-                    ? (it.steps.length === 0 && <div className="text-[11.5px] text-text-dim">分析中…</div>)
+                    ? null
                     : <div className="relative">
                         <MiniMarkdown text={it.typed} sources={it.sources} />
                         {!it.done && <span className="inline-block w-1.5 h-3.5 bg-accent/70 align-middle animate-pulse ml-0.5" />}

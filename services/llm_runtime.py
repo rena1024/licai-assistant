@@ -9,7 +9,7 @@ import time
 from urllib.parse import urlsplit
 from contextvars import ContextVar
 import requests
-from services import model_catalog, budget, runtime_state
+from services import model_catalog, budget, runtime_state, llm_activity
 from services.llm_types import CallContext, ModelRequest, ModelResult, Usage, LLMError
 from services.llm_adapters import adapter
 from services.user_context import require_user_id
@@ -140,20 +140,29 @@ async def _authorize(context,identifier,request):
 def _reservation(model,request):
     # UTF-8 字节上界覆盖工具、系统提示和多模态；图像按整个上下文预留。
     inputs=len(json.dumps(request.model_dump(mode='json'),ensure_ascii=False).encode())+1024
-    if 'image' in request.required_capabilities():inputs=model.context_limit-request.output_limit
-    if inputs+request.output_limit > model.context_limit:
+    output_limit=request.output_limit
+    if output_limit is None:
+        from services.llm_adapters.deepseek import DEFAULT_OUTPUT_TOKENS
+        output_limit=DEFAULT_OUTPUT_TOKENS
+    # 服务默认额度是可用上限，不要求输入之外必须剩余整个默认额度。
+    required_output=request.output_limit or 0
+    if 'image' in request.required_capabilities():inputs=model.context_limit-required_output
+    if inputs+required_output > model.context_limit:
         raise LLMError('context_limit','请求超过模型上下文限制')
     p=model.price
     # 缓存写入可能比普通输入贵，预留选择最高输入价格。
     snapshot=p.model_dump(mode='json')
     snapshot['input']=str(max(p.input,p.cache_write,p.cache_read,p.cache_write_1h or 0))
-    maximum=budget.cost_micro(snapshot,Usage(input_tokens=inputs,output_tokens=request.output_limit))
+    maximum=budget.cost_micro(snapshot,Usage(input_tokens=inputs,output_tokens=output_limit))
     return (maximum*110+99)//100
 
 
 async def _execute(context,request,identifier,attempt):
     started=time.monotonic()
     model,version=await _authorize(context,identifier,request)
+    # 目前仅 DeepSeek 支持经过核实的服务默认额度，其他协议保持原问答额度。
+    if request.output_limit is None and model.protocol != 'deepseek':
+        request=request.model_copy(update={'output_limit':8192})
     module=adapter(model.protocol)
     payload,path,headers=module.encode(model,request)
     rid=None
@@ -166,6 +175,7 @@ async def _execute(context,request,identifier,attempt):
         # SQLite 预留完成后再次验证，配置版本变化则撤销尚未发出的预留。
         current,current_version=await _authorize(context,identifier,request)
         if current_version != version:raise LLMError('config_changed','模型配置变化，请重试')
+        llm_activity.set_running(attempt)
         data=send_http(model,payload,path,headers)
         try:result=module.decode(data)
         except (ValueError,KeyError,TypeError,AttributeError):
@@ -212,12 +222,13 @@ def _worker(context,request,identifier,attempt):
     key,_=runtime_state.acquire_connection()
     try:
         model,_=asyncio.run(_authorize(context,identifier,request))
-        if model.local:
-            from services.local_queue import queue,configure_from_db
-            asyncio.run(configure_from_db())
-            with queue.slot(context,stop=_cancel.get()):
-                return asyncio.run(_execute(context,request,identifier,attempt))
-        return asyncio.run(_execute(context,request,identifier,attempt))
+        with llm_activity.track(attempt,context,model):
+            if model.local:
+                from services.local_queue import queue,configure_from_db
+                asyncio.run(configure_from_db())
+                with queue.slot(context,stop=_cancel.get()):
+                    return asyncio.run(_execute(context,request,identifier,attempt))
+            return asyncio.run(_execute(context,request,identifier,attempt))
     finally:runtime_state.release_connection(key)
 
 
@@ -262,4 +273,4 @@ async def generate(context:CallContext, request:ModelRequest, candidate_ids=None
                 break
             finally:
                 _workers.discard(work)
-    raise LLMError('all_candidates_failed','所选模型不可用：'+'；'.join(failures))
+    raise LLMError('all_candidates_failed','所选模型不可用：'+'；'.join(failures), failure_codes=failures)

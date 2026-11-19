@@ -1,7 +1,8 @@
 import { apiFetch } from '../hooks/sessionRuntime'
 import { useState, useEffect, useRef } from 'react'
 import { fetchJSON } from '../hooks/useApi'
-import { MiniMarkdown, SourcesBlock, ToolCallStrip, AnswerVersions, applyAnswerVersion, startRun, followRun, liveRuns, cancelRun } from './askShared'
+import useLLMStatus from '../hooks/useLLMStatus'
+import { MiniMarkdown, SourcesBlock, ToolCallStrip, AnswerVersions, AnswerProgress, applyAnswerVersion, startRun, followRun, liveRuns, cancelRun } from './askShared'
 import ImageZoom from './ImageZoom'
 
 // 能力展示型推荐问题 (page 模式空态用), 覆盖 市场风格/资金主线/政策/基本面/同行/筹码
@@ -20,6 +21,8 @@ const PAGE = { history: [], sessionId: null, run: null }
 export default function StockAsk({ page = false }) {
   const [q, setQ] = useState('')
   const [loading, setLoading] = useState(false)
+  const [activeRunId, setActiveRunId] = useState(PAGE.run?.id || '')
+  const llm = useLLMStatus(loading, { taskId: activeRunId })
   const [history, setHistory] = useState(PAGE.history)   // [{q, steps, thought, answer, typed, done, err}]
   const [holdings, setHoldings] = useState([])
   const [sessions, setSessions] = useState([])      // 历史会话列表
@@ -108,6 +111,7 @@ export default function StockAsk({ page = false }) {
 
   // 跟看一条已经在跑(或刚跑完)的 run。断开只是不看了 —— 所以这里不做任何"中断"标记。
   const attach = (runId, cursor = 0) => {
+    setActiveRunId(runId)
     abortRef.current?.abort()
     const ctrl = new AbortController(); abortRef.current = ctrl
     PAGE.run = { id: runId, cursor }
@@ -347,7 +351,7 @@ export default function StockAsk({ page = false }) {
               {it.err
                 ? <div className="text-[11.5px] text-bull-bright">出错: {it.err}</div>
                 : it.answer == null
-                  ? (it.steps.length === 0 && <div className="text-[11.5px] text-text-dim">分析中…</div>)
+                  ? <AnswerProgress turn={it} active={loading && i === history.length - 1} label={llm.label} />
                   : <div className="relative">
                       <MiniMarkdown text={it.typed} sources={it.sources} />
                       {!it.done && <span className="inline-block w-1.5 h-3.5 bg-accent/70 align-middle animate-pulse ml-0.5" />}

@@ -1,5 +1,14 @@
 import { apiFetch } from '../hooks/sessionRuntime'
+import { fetchJSON } from '../hooks/useApi'
 import { useState } from 'react'
+
+export function AnswerProgress({ turn, active, label }) {
+  if (!active || turn.done || turn.err || turn.answer != null) return null
+  return <p role="status" className="text-[11.5px] text-text-dim my-2 leading-relaxed break-words">
+    <span aria-hidden="true" className="inline-block w-1.5 h-1.5 rounded-full bg-accent animate-pulse mr-1.5" />
+    {label}
+  </p>
+}
 
 export function applyAnswerVersion(turn, event) {
   const previous = [...(turn.versions || [])]
@@ -293,21 +302,17 @@ export function SourcesBlock({ sources }) {
 // 关键区别: 停止跟看 ≠ 取消。切页/关抽屉只 abort 下面这根 follow 连接, run 自己跑完并落库,
 // 所以回来能接着看, 没回来也能在历史里翻到。
 export async function startRun(body) {
-  const r = await apiFetch('/api/ask/runs', {
+  return fetchJSON('/api/ask/runs', {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
   })
-  if (!r.ok) throw new Error(`${r.status}`)
-  return r.json()          // {run_id, session_id, cursor, images}
 }
 
 // 四层交叉深挖: 起一条后台 run(一轮约 3 分半, 5 次 LLM), 返回同样的 {run_id, session_id}。
 // 走 run 而不是同步请求: 同步的话浏览器/代理会掐断, 而且切页就白跑了。
 export async function startDeepDive(body) {
-  const r = await apiFetch('/api/ask/deep-dive', {
+  return fetchJSON('/api/ask/deep-dive', {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
   })
-  if (!r.ok) throw new Error(`${r.status}`)
-  return r.json()
 }
 
 // 跟看一条 run: 从 cursor 起把事件喂给 onEvent(每条带 ev.cursor, 记着它就能断点续看)。
@@ -315,6 +320,10 @@ export async function startDeepDive(body) {
 // (跑完超过保留期被清掉, 或服务重启过), 这时该回 DB 取原文, 别把界面标成出错。
 export function followRun(runId, { cursor = 0, onEvent, onEnd, onError, signal } = {}) {
   apiFetch(`/api/ask/runs/${runId}/events?cursor=${cursor}`, { signal }).then(async (resp) => {
+    if (!resp.ok) {
+      const data = await resp.json().catch(() => ({}))
+      throw new Error(data.detail?.message || (typeof data.detail === 'string' ? data.detail : `HTTP ${resp.status}`))
+    }
     const reader = resp.body.getReader(); const dec = new TextDecoder()
     let buf = ''
     let finished = false
@@ -333,6 +342,7 @@ export function followRun(runId, { cursor = 0, onEvent, onEnd, onError, signal }
         onEvent?.(ev)
       }
     }
+    if (!finished && !gone) throw new Error('进度连接已中断，任务可能仍在后台运行。请重新打开对话查看结果。')
     onEnd?.({ finished, gone })
   }).catch(e => { if (e.name !== 'AbortError') onError?.(String(e)) })
 }

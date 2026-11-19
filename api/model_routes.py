@@ -1,10 +1,26 @@
 """模型开放配置与当前登录用户的场景偏好。"""
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Request, Query
 from pydantic import BaseModel, ConfigDict, Field
 from services import model_catalog as catalog
 from services.llm_types import LLMError
 
 router = APIRouter(prefix='/api/models', tags=['models'])
+
+
+def _capability_error_reason(error):
+    # 仅展示受控错误码对应的说明，避免回显厂商响应中的凭证或请求内容。
+    messages = {
+        'cloud_held': '云端调用已暂停，请在“用量与预算”核对后确认开放',
+        'model_unavailable': '模型已停用或未开放所测能力，请检查模型服务设置',
+        'budget_unconfigured': '全局日额度和月额度均须大于 0；任一留空或为 0 都会阻止云端模型测试，请在“用量与预算”补齐',
+        'budget_exhausted': '可用额度不足，请检查用量与预算',
+        'usage_unknown': '存在用量待核对的调用，请先在用量与预算中处理',
+        'provider_transport_error': '无法连接模型服务，请检查服务地址和网络',
+        'private_endpoint': '云端服务域名解析为非公网地址，已阻止请求；请检查代理 Fake-IP 或 DNS 配置，确保该域名解析为真实公网地址',
+        'provider_http_error': '模型服务拒绝请求，请检查凭证、模型 ID 和服务状态',
+    }
+    reasons = list(dict.fromkeys(messages[code] for code in (error.failure_codes or (error.code,)) if code in messages))
+    return '能力测试未通过：' + '；'.join(reasons) if reasons else '能力测试未通过，请检查配置及用量状态'
 
 
 class Preferences(BaseModel):
@@ -38,6 +54,15 @@ async def save_model(request: Request):
 @router.get('/preferences')
 async def preferences():
     return await catalog.preferences()
+
+
+@router.get('/activity')
+async def model_activity(request_id: str = Query(default='', pattern=r'^([a-f0-9]{32})?$'),
+                         task_id: str = Query(default='', max_length=128)):
+    from fastapi.responses import JSONResponse
+    from services import llm_activity
+    return JSONResponse({'calls': llm_activity.snapshot(request_id=request_id, task_id=task_id)},
+                        headers={'Cache-Control': 'no-store'})
 
 
 @router.put('/preferences')
@@ -116,7 +141,9 @@ async def test_capability(identifier: str, data: CapabilityTest):
         if capability=='tools':success=any(t.get('name')=='ping' and t.get('input',{}).get('value')=='OK' for t in result.tool_calls)
         elif capability=='structured':success=json.loads(text)=={'ok':True}
         if not success:reason='模型响应未满足能力合同'
-    except (LLMError,ValueError):
+    except LLMError as exc:
+        reason=_capability_error_reason(exc)
+    except ValueError:
         reason='能力测试未通过，请检查配置及用量状态'
     db=await get_db()
     try:

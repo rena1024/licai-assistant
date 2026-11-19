@@ -15,6 +15,11 @@ import services.llm_client as _llm
 import services.answer_guard as _guard
 
 _MAX_ROUNDS = 8
+_FINAL_SUMMARY = (
+    '本次取数轮数已用完。请停止调用工具，只依据已经返回的数据回答用户的原始问题。'
+    '先给出已能确认的结论和依据，再明确列出尚未完成的部分及缺失数据；'
+    '不得编造数据，不得把未核实的判断写成确定结论。'
+)
 
 # A 股 代码↔名称 表 (akshare, 缓存 12h, 供按名字解析)
 _code_name_cache: tuple[dict, dict, float] | None = None
@@ -3942,7 +3947,7 @@ _OVERLOAD_ROUND_RETRIES = 3
 _OVERLOAD_ROUND_WAIT_S = 20      # 第 n 次等 n×20 秒
 
 
-async def _llm_round(messages: list):
+async def _llm_round(messages: list, *, allow_tools: bool = True):
     """跑一轮 LLM 调用, 上游过载则原样重发。
 
     async generator, 产出 (kind, value):
@@ -3953,7 +3958,8 @@ async def _llm_round(messages: list):
     for attempt in range(_OVERLOAD_ROUND_RETRIES + 1):
         try:
             resp = await asyncio.to_thread(
-                _llm.call_claude_messages, messages, _system(), None, 4096, await _active_tools(), scene='ask')
+                _llm.call_claude_messages, messages, _system(), None, None,
+                await _active_tools() if allow_tools else [], scene='ask')
             yield ("resp", resp)
             return
         except _llm.LLMOverloaded as e:
@@ -3985,9 +3991,13 @@ async def ask_stock_stream(question: str, history: list | None = None, images: l
     tool_outs: dict = {}
     used: list = []
     repaired = False
-    for rnd in range(_MAX_ROUNDS):
+    # 取数额度之外保留一次总结，不让已取得的数据止于超限提示。
+    for rnd in range(_MAX_ROUNDS + 1):
+        final_round = rnd == _MAX_ROUNDS
+        if final_round:
+            messages.append({'role': 'user', 'content': _FINAL_SUMMARY})
         resp = None
-        async for kind, val in _llm_round(messages):
+        async for kind, val in _llm_round(messages, allow_tools=not final_round):
             if kind == "wait":
                 yield val
             elif kind == "error":
@@ -4018,10 +4028,18 @@ async def ask_stock_stream(question: str, history: list | None = None, images: l
         if fresh:
             yield {"type": "sources", "sources": fresh}
         tus = [b for b in content if b.get("type") == "tool_use"]
+        if final_round and tus:
+            yield {'type': 'error', 'code': 'round_limit',
+                   'error': '取数轮数已用完，模型未能基于现有数据完成总结'}
+            return
         if not tus:
             before = len(sources)
             text = _assemble_cited_text(content, sources, seen_urls)
-            problems = _guard.inspect(text, used, tool_outs) if not repaired else []
+            problems = _guard.inspect(text, used, tool_outs) if not repaired or final_round else []
+            if final_round and (problems or not text.strip()):
+                yield {'type': 'error', 'code': 'incomplete_summary',
+                       'error': '取数轮数已用完，最终总结未通过检查，本次分析未完成'}
+                return
             if problems:
                 repaired = True
                 yield {"type": "step", "tool": "self_check", "label": "回答自查",
@@ -4067,8 +4085,6 @@ async def ask_stock_stream(question: str, history: list | None = None, images: l
                     "content": _result_content(out)}
                    for tu, out in zip(tus, outs)]
         messages.append({"role": "user", "content": results})
-    yield {"type": "answer", "text": "（分析步数超限, 请换个问法或更具体）"}
-    yield {"type": "done"}
 
 
 async def ask_stock(question: str, history: list | None = None, images: list | None = None) -> dict:
@@ -4084,9 +4100,12 @@ async def ask_stock(question: str, history: list | None = None, images: list | N
     charts: list = []
     tool_outs: dict = {}          # 工具名 → [返回值], 给护栏对答案
     repaired = False              # 护栏只补一轮, 防来回拉锯
-    for rnd in range(_MAX_ROUNDS):
+    for rnd in range(_MAX_ROUNDS + 1):
+        final_round = rnd == _MAX_ROUNDS
+        if final_round:
+            messages.append({'role': 'user', 'content': _FINAL_SUMMARY})
         resp = None
-        async for kind, val in _llm_round(messages):     # "wait" 事件非流式版没处可推, 丢掉
+        async for kind, val in _llm_round(messages, allow_tools=not final_round):
             if kind == "error":
                 return {"answer": "", "error": val, "tools_used": tools_used, "rounds": rnd}
             if kind == "resp":
@@ -4094,15 +4113,25 @@ async def ask_stock(question: str, history: list | None = None, images: list | N
         if resp is None:
             return {"answer": "", "error": "LLM 无响应", "tools_used": tools_used, "rounds": rnd}
         content = resp.get("content", [])
+        if resp.get('stop_reason') == 'max_tokens':
+            partial = ''.join(b.get('text', '') for b in content if b.get('type') == 'text')
+            return {'answer': '', 'partial': partial, 'error': '达到输出上限，本版本未完成',
+                    'tools_used': tools_used, 'rounds': rnd + 1, 'sources': sources, 'charts': charts}
         messages.append({"role": "assistant", "content": content})
         # 服务端 web_search 也计入 tools_used(它是 server_tool_use, 不在 tus 里, 否则会被漏记成"没联网")
         tools_used.extend("web_search" for b in content
                           if b.get("type") == "server_tool_use" and b.get("name") == "web_search")
         _collect_sources(content, sources, seen_urls)
         tus = [b for b in content if b.get("type") == "tool_use"]
+        if final_round and tus:
+            return {'answer': '', 'error': '取数轮数已用完，模型未能基于现有数据完成总结',
+                    'tools_used': tools_used, 'rounds': rnd + 1, 'sources': sources, 'charts': charts}
         if not tus:
             text = _assemble_cited_text(content, sources, seen_urls)
-            problems = _guard.inspect(text, tools_used, tool_outs) if not repaired else []
+            problems = _guard.inspect(text, tools_used, tool_outs) if not repaired or final_round else []
+            if final_round and (problems or not text.strip()):
+                return {'answer': '', 'error': '取数轮数已用完，最终总结未通过检查，本次分析未完成',
+                        'tools_used': tools_used, 'rounds': rnd + 1, 'sources': sources, 'charts': charts}
             if problems:
                 # 只补一轮: 让模型只改这几点。不违规时这段完全不执行(常态零成本)。
                 repaired = True
@@ -4128,5 +4157,3 @@ async def ask_stock(question: str, history: list | None = None, images: list | N
                     "content": _result_content(out)}
                    for tu, out in zip(tus, outs)]
         messages.append({"role": "user", "content": results})
-    return {"answer": "（分析步数超限, 请换个问法或更具体）", "tools_used": tools_used,
-            "rounds": _MAX_ROUNDS, "charts": charts}

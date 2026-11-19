@@ -3,13 +3,14 @@ import sqlite3
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import JSONResponse
 from services import runtime_state
+from services import llm_activity
 
 
 class RuntimeSafetyMiddleware(BaseHTTPMiddleware):
     async def dispatch(self,request,call_next):
         if request.url.path=='/api/health':return await call_next(request)
         try:
-            with runtime_state.runtime_scope():
+            with runtime_state.runtime_scope(), llm_activity.request_scope(request.headers.get('X-LLM-Activity', '')):
                 return await call_next(request)
         except runtime_state.RuntimeUnavailable as exc:
             return JSONResponse({'detail':{'code':exc.code,'message':str(exc)}},status_code=503,headers={'Cache-Control':'no-store','Retry-After':'5'})

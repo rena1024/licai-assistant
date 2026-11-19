@@ -2,11 +2,16 @@
 from services.llm_adapters import openai_compatible as chat
 from services.llm_types import LLMError
 
+# 当前接口默认开启思考模式；仅用于费用预留，不发送为输出限制。
+DEFAULT_OUTPUT_TOKENS = 65536
+
 
 def encode(model,request):
     if request.response_schema:
         raise LLMError('unsupported_capability','该 DeepSeek 适配器不支持严格 JSON Schema 输出')
     payload,_,headers=chat.encode(model,request)
+    if request.output_limit is None:
+        payload.pop('max_tokens', None)
     return payload,'/chat/completions',headers
 
 
