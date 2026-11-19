@@ -127,6 +127,63 @@ async def mark_read(identifier):
         await db.close()
 
 
+async def mark_many_read(identifiers):
+    identifiers=list(dict.fromkeys(identifiers))
+    if not 1<=len(identifiers)<=50:
+        raise ValueError('每次须选择1～50条消息')
+    db=await get_db()
+    try:
+        uid=require_user_id()
+        placeholders=','.join('?' for _ in identifiers)
+        await db.execute('BEGIN IMMEDIATE')
+        count=await (await db.execute(
+            f'SELECT COUNT(*) FROM notifications WHERE user_id=? AND id IN ({placeholders})',
+            (uid,*identifiers),
+        )).fetchone()
+        # 先校验整批归属，避免混入无权访问的消息时只更新部分数据。
+        if count[0]!=len(identifiers):
+            await db.rollback()
+            return False
+        await db.execute(
+            f'UPDATE notifications SET read_at=COALESCE(read_at,?) WHERE user_id=? AND id IN ({placeholders})',
+            (int(time.time()),uid,*identifiers),
+        )
+        await db.commit()
+        return True
+    finally:
+        await db.close()
+
+
+async def delete_messages(identifiers):
+    identifiers=list(dict.fromkeys(identifiers))
+    if not 1<=len(identifiers)<=50:
+        raise ValueError('每次须选择1～50条消息')
+    db=await get_db()
+    try:
+        uid=require_user_id()
+        placeholders=','.join('?' for _ in identifiers)
+        parameters=(uid,*identifiers)
+        await db.execute('BEGIN IMMEDIATE')
+        count=await (await db.execute(
+            f'SELECT COUNT(*) FROM notifications WHERE user_id=? AND id IN ({placeholders})',parameters,
+        )).fetchone()
+        if count[0]!=len(identifiers):
+            await db.rollback()
+            return False
+        sending=await (await db.execute(
+            f"SELECT 1 FROM notification_deliveries WHERE user_id=? AND notification_id IN ({placeholders}) AND state='sending' LIMIT 1",parameters,
+        )).fetchone()
+        if sending:
+            raise ValueError('选中的通知正在发送，请稍后重试删除')
+        # 同一事务清除投递队列，保留独立事件去重记录，避免重新生成或继续外发。
+        await db.execute(f'DELETE FROM notification_deliveries WHERE user_id=? AND notification_id IN ({placeholders})',parameters)
+        await db.execute(f'DELETE FROM notifications WHERE user_id=? AND id IN ({placeholders})',parameters)
+        await db.commit()
+        return True
+    finally:
+        await db.close()
+
+
 async def cleanup(*,now=None):
     now=int(time.time() if now is None else now)
     db=await get_db()

@@ -1,7 +1,7 @@
 """当前用户消息和渠道；所有资源由服务端登录身份限定。"""
 import time
 from fastapi import APIRouter,HTTPException,Request,Query
-from pydantic import BaseModel,ConfigDict
+from pydantic import BaseModel,ConfigDict,Field
 from services import notifications as n,notification_delivery as d,runtime_state
 
 router=APIRouter(prefix='/api/notifications',tags=['notifications'])
@@ -18,6 +18,11 @@ class Resend(BaseModel):
     confirmed: bool
 
 
+class MessageSelection(BaseModel):
+    model_config=ConfigDict(extra='forbid',strict=True)
+    ids: list[str] = Field(min_length=1,max_length=50)
+
+
 @router.get('')
 async def messages(limit: int=Query(50,ge=1,le=100),before: int | None=None,cursor: str | None=None):
     return {'messages':await n.list_messages(limit=limit,before=before,cursor=cursor)}
@@ -27,6 +32,23 @@ async def messages(limit: int=Query(50,ge=1,le=100),before: int | None=None,curs
 async def read(identifier: str):
     if not await n.mark_read(identifier):
         raise HTTPException(404,'消息不存在')
+    return {'ok':True}
+
+
+@router.post('/read')
+async def read_messages(data: MessageSelection):
+    if not await n.mark_many_read(data.ids):
+        raise HTTPException(404,'消息不存在')
+    return {'ok':True}
+
+
+@router.post('/delete')
+async def delete_messages(data: MessageSelection):
+    try:
+        if not await n.delete_messages(data.ids):
+            raise HTTPException(404,'消息不存在')
+    except ValueError as exc:
+        raise HTTPException(409,str(exc)) from None
     return {'ok':True}
 
 
