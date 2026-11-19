@@ -488,14 +488,14 @@ export default function UnifiedPortfolio({ holdings, onEdit, onHistory, onAdd, d
 
       {/* Column headers */}
       {!isEmpty && (
-        <div className="licai-row px-3 md:px-6 py-2 text-[10.5px] text-text-dim tracking-wider font-medium border-b border-border bg-surface">
+        <div className="licai-row px-3 md:px-6 py-2 text-right text-[10.5px] text-text-dim tracking-wider font-medium border-b border-border bg-surface">
           <div className="text-left">名称 · 代码</div>
-          <div className="text-right">市值</div>
-          <div className="text-right licai-md-only">成本</div>
-          <div className="text-right">浮动盈亏</div>
-          <div className="text-right">今日</div>
-          <div className="text-right licai-md-only">占比</div>
-          <div className="text-left pl-2">操作</div>
+          <div>市值</div>
+          <div className="licai-md-only">成本</div>
+          <div>持有收益</div>
+          <div className="text-center">今日</div>
+          <div className="text-center licai-md-only">占比</div>
+          <div className="text-center">操作</div>
         </div>
       )}
 
@@ -536,7 +536,7 @@ export default function UnifiedPortfolio({ holdings, onEdit, onHistory, onAdd, d
                 <span className="text-[10px] opacity-80 ml-1.5">({fmtPct(g.pnlPct)})</span>
               </div>
               <div />
-              <div className="text-right font-mono text-text licai-md-only">{(g.weight * 100).toFixed(1)}%</div>
+              <div className="text-center font-mono text-text licai-md-only">{(g.weight * 100).toFixed(1)}%</div>
               <div />
             </div>
 
@@ -563,7 +563,7 @@ export default function UnifiedPortfolio({ holdings, onEdit, onHistory, onAdd, d
                   clusters[cid].cost += it.cost || 0
                   clusters[cid].pnl += it.pnl || 0
                 }
-                const ordered = Object.values(clusters).sort((a, b) => b.mv - a.mv)
+                const ordered = Object.values(clusters).sort((a, b) => b[sortKey] - a[sortKey])
                 if (ordered.length > 1) {
                   return ordered.map((cl, ci) => {
                     const isLastCluster = ci === ordered.length - 1

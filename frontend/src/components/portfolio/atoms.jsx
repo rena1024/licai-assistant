@@ -334,7 +334,7 @@ export function RowActions({ row, visible, onEdit, onHistory, onRemove, onAddLot
   return (
     <>
       {/* 移动端: 始终显示, 1 字按钮, 紧凑 */}
-      <div className="flex md:hidden gap-0.5 justify-end items-center">
+      <div className="flex flex-wrap w-full md:hidden gap-0.5 justify-center items-center">
         {actions.map(a => (
           <button key={a.label} onClick={a.fn}
             className={`${btnBase} px-1.5 py-[2px] text-[11px] min-w-[20px] ${a.highlight ? 'border-warn/60 text-warn' : ''}`}
@@ -344,11 +344,10 @@ export function RowActions({ row, visible, onEdit, onHistory, onRemove, onAddLot
       </div>
       {/* 桌面: hover 显示, 全名. 容器 pointer-events:none, 按钮自己 auto;
           按钮间空隙能让 hover 事件穿透到下层 TypeMiniInfo (反推 tooltip 等). */}
-      <div className="hidden md:flex gap-1 justify-end items-center"
+      <div className="hidden md:flex flex-wrap w-full gap-1 justify-center items-center"
         style={{
           opacity: visible ? 1 : 0,
-          transform: visible ? 'translateX(0)' : 'translateX(4px)',
-          transition: 'opacity .18s, transform .18s',
+          transition: 'opacity .18s',
           pointerEvents: 'none',
         }}>
         {actions.map(a => (

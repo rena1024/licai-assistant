@@ -125,6 +125,60 @@ LICAI_DATA_DIR="$PWD/runtime-data" python run.py
 持仓归属、升级保护及当前功能边界见[资产归属说明](docs/deployment/portfolio-ownership.md)。
 个人后台任务暂待 A09／A10 接入用户分发；旧版整表导入暂待 A08，当前导出仅含本人持仓资产，不是完整备份。
 
+### 补录历史股票交易
+
+在部署机器的项目根目录，使用与理财助手相同的 Python 环境和 `LICAI_DATA_DIR`。
+工具读取券商交割明细 `.xlsx`，支持人民币沪深 A 股的证券买入、证券卖出和现金分红。
+理财助手账号 ID 通过 `--user-id` 指定。默认使用华泰证券内置映射。
+
+```bash
+# 预览目标数据库、账号、预计新增流水与重算后的持仓
+LICAI_DATA_DIR="$PWD/runtime-data" python scripts/import_stock_history.py /path/to/trades.xlsx --user-id 1
+
+# 核对预览结果后，备份并写入
+LICAI_DATA_DIR="$PWD/runtime-data" python scripts/import_stock_history.py /path/to/trades.xlsx --user-id 1 --apply
+```
+
+如果只想补录一只股票，可加 `--stock-code 600009`，用实际证券代码替换示例。`--broker` 可以覆盖账本中的券商名称。
+工具按成交日期、方向、价格、数量、费用和券商匹配已有流水。完全匹配的记录会跳过，同日有无法匹配的流水时会报错并指出日期。
+导入卖出前请补齐对应的建仓流水。单只股票导入后最多支持 500 笔，以符合现有页面的读取上限。
+
+现金分红使用对账单的实收金额，交易历史中的数量 1 表示一笔入账。资金余额留在对账单中。
+核对持仓和逐笔记录时，可在理财页面打开对应股票的「交易历史」。A 股持仓成本按当前持仓周期的实收股息扣减，总盈亏只计一次股息。账本缺少股息时，可补录券商交割明细。
+
+#### 适配其他券商
+
+复制[示例映射](docs/examples/stock-history-mapping.json)，把列名和业务取值换成对账单里的文字。不同用户可以各用一份映射，同一券商同一版式可以复用。
+
+```bash
+LICAI_DATA_DIR="$PWD/runtime-data" python scripts/import_stock_history.py /path/to/trades.xlsx --user-id 1 --mapping /path/to/mapping.json
+```
+
+| 配置项 | 填写方式 |
+| --- | --- |
+| `broker` | 券商名称，也可通过 `--broker` 指定。 |
+| `sheet`、`header_row` | 多工作表文件需指定明细表名。表头行号默认是 1。 |
+| `date_format` | 默认接受 Excel 日期、`YYYY-MM-DD` 和 `YYYYMMDD`。例如日期为 `2026/1/2` 时可配置 `%Y/%m/%d`。 |
+| `columns` | 必填 `date`（日期）、`code`（代码）、`action`（摘要）。买卖需要 `quantity`（股数）和 `price`（成交价）。股息需要 `dividend_amount`（实收总额），也可沿用 `settlement`（结算净额）。可选 `name`（证券名称）和 `account`（股东账号）。若未映射股东账号，请先确认同一股票的记录来自同一股东账号。 |
+| `currency` | 有币种列时在 `columns` 里映射 `currency`。整份文件都是人民币且无币种列时，在映射顶层写 `"currency": "CNY"`。 |
+| `fee_columns` | 配一列合计费用，或列出佣金、印花税等明细费用列，由工具求和。缺少费用数据时可省略，交易费用由账本估算。 |
+| `settlement_mode` | 映射了 `settlement` 和费用列时，工具核对买卖结算金额。默认 `signed`（买入支出为负）。券商统一导出为正数时用 `absolute`。 |
+| `actions` | 把表中实际的业务摘要或业务代码映射为 `BUY`、`SELL`、`DIVIDEND`。明确排除的类别可映射为 `IGNORE`。遇到未知摘要时，工具会提示行号并停止。 |
+
+### 补录历史基金交易
+
+使用独立基金导入工具读取 Excel 的 `position` 工作表，默认平台为支付宝。支持定投及普通买入、按买入处理的转换、零成本赠送、零赎回费卖出和现金分红。
+
+```bash
+# 默认只读预览；账号 ID 替换为实际账号
+LICAI_DATA_DIR="$PWD/runtime-data" python scripts/import_fund_history.py /path/to/funds.xlsx --user-id 1
+
+# 核对后备份并写入
+LICAI_DATA_DIR="$PWD/runtime-data" python scripts/import_fund_history.py /path/to/funds.xlsx --user-id 1 --apply
+```
+
+按来源订单号去重，内容冲突整次拒绝；可用 `--exclude-order` 明确排除待核对订单。仅有五年记录也可先导入，工具不会伪造期初持仓；历史补齐前份额、成本和盈亏可能不完整。字段、规则及后补历史方法见[基金历史补录说明](docs/fund-history-import.md)。
+
 ### 可选：飞书通知
 
 设置 → 飞书 Webhook → 粘贴 URL 保存。所有推送（早盘简报 / 收盘小结 / 基本面恶化警示）会发过去。
@@ -370,7 +424,7 @@ prompt 里已经堆了几十条读盘原则，靠"再加一句嘱咐"来修 bug 
 基金这块有两件容易算错、这里做对了的事：
 
 - **份额拆分自动检测入账** — 对比原始 / 前复权日 K 探测拆分因子，份额 ×N、单价 ÷N，零盈亏
-- **盈亏用摊薄成本口径** — 减仓已实现摊进持仓成本，隔夜清仓重置，跟券商 App 逐分对齐
+- **基金使用移动加权平均成本** — 买入支出含申购费，部分赎回按平均成本结转。默认展示持有收益（含按剩余份额分摊的现金分红）和持有收益率，累计收益另列，分红不重复计算。其他资产沿用原有成本口径，详见[基金成本说明](docs/fund-history-import.md#基金成本与收益口径)
 - **场内 ETF 与场外基金分开算、分开标** — 前者在交易所按市价 + 券商佣金成交，后者按 T+1 净值申赎，顶栏与 AI 问答都按各自的名字表述，不混成一个「场外」
 
 **附配套**

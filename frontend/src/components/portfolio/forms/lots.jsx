@@ -243,7 +243,7 @@ export function AddLotRow({ asset, onDone, onCancel, brokers = [] }) {
         <div className={isWealth ? 'grid grid-cols-2 gap-2' : ''}>
           <div>
             <label className="text-[11.5px] text-text-dim block mb-1">{isWealth ? '本笔起投日' : '日期'}</label>
-            <input type="date" value={lotStartDate} onChange={e => setLotStartDate(e.target.value)}
+            <input type="date" min="0001-01-01" max="9999-12-31" value={lotStartDate} onChange={e => setLotStartDate(e.target.value)}
               className="bg-bg border border-border rounded-lg px-3 py-2 text-[13px] font-mono outline-none focus:border-accent w-full" />
             {isShareBased && (
               <input type="time" value={lotTime} onChange={e => setLotTime(e.target.value)}
@@ -466,7 +466,7 @@ export function ReduceLotRow({ asset, onDone, onCancel }) {
         <div>
           <label className="text-[11.5px] text-text-dim block mb-1">日期{isShareBased && <span className="text-text-muted text-[10px]"> · 时刻可空</span>}</label>
           <div className="flex gap-2">
-            <input type="date" value={tradeDate} onChange={e => setTradeDate(e.target.value)}
+            <input type="date" min="0001-01-01" max="9999-12-31" value={tradeDate} onChange={e => setTradeDate(e.target.value)}
               className="bg-bg border border-border rounded-lg px-3 py-2 text-[13px] font-mono outline-none focus:border-accent" />
             {isShareBased && (
               <input type="time" value={tradeTime} onChange={e => setTradeTime(e.target.value)}

@@ -135,7 +135,7 @@ body::after {
 /* ========================================================
  * Responsive table grids
  * Mobile: 5-column compact (name | mv | pnl | today | actions)
- * Desktop (≥768): full 8-column with cost / weight / days / type-info
+ * Desktop (≥768): 7-column with cost / weight / actions
  * ======================================================== */
 
 /* UnifiedPortfolio: holdings table */
@@ -145,7 +145,7 @@ body::after {
 }
 @media (min-width: 768px) {
   .licai-row {
-    grid-template-columns: 22% 10% 9% 14% 14% 13% 18%;
+    grid-template-columns: 18% 11% 10% 14% 10% 9% 28%;
   }
 }
 /* Cells visible only on desktop (cost / weight / days / type-info) */

@@ -228,22 +228,17 @@ export function HoldingRow({ row, isLast, hovered, onHover, totalMv, insights, c
         <TodayPulse change={row.today} stale={row.type === 'A' && row._raw?.today_valid === false} />
       )}
     </div>
-    <div className="text-right licai-md-only">
+    <div className="text-center licai-md-only">
       <WeightBar weight={row.mv / (totalMv || 1)} color={TYPE_COLOR[row.type]} />
     </div>
-    <div className="relative pl-1 md:pl-2">
-      {/* TypeMiniInfo: 桌面始终可见 (不再 hover 隐藏); 移动隐藏 */}
-      <div className="hidden md:block">
+    <div className="min-w-0 text-center md:grid md:grid-cols-1">
+      {/* 桌面按钮限定在操作栏内换行；网格叠放让按钮高度参与行高计算。 */}
+      <div className="hidden md:block md:col-start-1 md:row-start-1">
         <TypeMiniInfo row={row} />
       </div>
-      {/* RowActions: 桌面 hover 显示, 绝对覆盖右半. 容器 pointer-events-none 让事件
-          穿透到 TypeMiniInfo (反推 tooltip 之类), 子元素重置 auto 接收点击.
-          hover 时给个 surface-2 渐变遮罩, 与 row hover 背景色一致, 视觉自然. */}
-      <div className="md:absolute md:inset-y-0 md:right-0 flex items-center md:pr-3 md:pointer-events-none [&>div]:pointer-events-auto transition-opacity"
+      <div className="flex items-center md:col-start-1 md:row-start-1 md:pointer-events-none [&>div]:pointer-events-auto transition-opacity"
         style={{
-          background: hovered
-            ? 'linear-gradient(to right, transparent 0%, var(--color-surface-2) 18%, var(--color-surface-2) 100%)'
-            : 'transparent',
+          background: hovered ? 'var(--color-surface-2)' : 'transparent',
           transition: 'background .18s',
         }}>
         <RowActions row={row} visible={hovered} hasThesis={hasThesis} {...actions} />
