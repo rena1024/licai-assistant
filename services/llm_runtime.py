@@ -149,7 +149,8 @@ def _reservation(model,request):
     if 'image' in request.required_capabilities():inputs=model.context_limit-required_output
     if inputs+required_output > model.context_limit:
         raise LLMError('context_limit','请求超过模型上下文限制')
-    p=model.price
+    from services.model_pricing import reservation_price
+    p=reservation_price(model)
     # 缓存写入可能比普通输入贵，预留选择最高输入价格。
     snapshot=p.model_dump(mode='json')
     snapshot['input']=str(max(p.input,p.cache_write,p.cache_read,p.cache_write_1h or 0))
@@ -167,7 +168,8 @@ async def _execute(context,request,identifier,attempt):
     payload,path,headers=module.encode(model,request)
     rid=None
     if not model.local:
-        rid=await budget.reserve_attempt(context,identifier,model.price.model_dump(mode='json'),_reservation(model,request),attempt)
+        from services.model_pricing import snapshot
+        rid=await budget.reserve_attempt(context,identifier,snapshot(model),_reservation(model,request),attempt)
     else:
         from services.usage import start_local
         rid=await start_local(context,identifier,attempt)

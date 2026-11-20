@@ -40,6 +40,18 @@ class Price(BaseModel):
     cache_write_1h: Decimal | None = Field(default=None,ge=0,le=100000)
 
 
+class DeepSeekRates(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    input: Decimal = Field(ge=0, le=100000)
+    output: Decimal = Field(ge=0, le=100000)
+    cache_read: Decimal = Field(ge=0, le=100000)
+
+
+class TimePricing(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    off_peak: DeepSeekRates
+
+
 class ModelConfig(BaseModel):
     model_config = ConfigDict(extra='forbid')
     id: str = Field(pattern=r'^[a-zA-Z0-9_-]{1,64}$')
@@ -52,9 +64,14 @@ class ModelConfig(BaseModel):
     capabilities: set[Capability] = Field(default_factory=lambda: {'text'})
     context_limit: int = Field(default=32768, ge=1024, le=2000000)
     price: Price | None = None
+    time_pricing: TimePricing | None = None
 
     @model_validator(mode='after')
     def validate_config(self):
+        if self.time_pricing and (self.protocol != 'deepseek' or self.local or self.price is None):
+            raise ValueError('分时计价仅适用于已配置高峰价格的 DeepSeek 云端模型')
+        if self.time_pricing and (self.price.currency != 'CNY' or self.price.exchange_rate != 1):
+            raise ValueError('DeepSeek 分时价格须使用人民币，汇率固定为 1')
         u = urlsplit(self.endpoint)
         try:
             port = u.port

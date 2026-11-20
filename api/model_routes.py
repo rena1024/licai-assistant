@@ -10,6 +10,7 @@ router = APIRouter(prefix='/api/models', tags=['models'])
 def _capability_error_reason(error):
     # 仅展示受控错误码对应的说明，避免回显厂商响应中的凭证或请求内容。
     messages = {
+        'pricing_calendar_unavailable': '分时计价日历不覆盖当前年份，请更新日历或核对后改用固定价格',
         'cloud_held': '云端调用已暂停，请在“用量与预算”核对后确认开放',
         'model_unavailable': '模型已停用或未开放所测能力，请检查模型服务设置',
         'budget_unconfigured': '全局日额度和月额度均须大于 0；任一留空或为 0 都会阻止云端模型测试，请在“用量与预算”补齐',

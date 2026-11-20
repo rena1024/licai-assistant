@@ -7,7 +7,7 @@ from database import get_db
 from services.accounts import _require_admin
 from services.user_context import require_user_id
 from services.llm_types import LLMError, Usage
-from services.model_catalog import Price
+from services.model_pricing import PriceSnapshot
 
 TZ = timezone(timedelta(hours=8))
 SCHEMA = '''
@@ -62,7 +62,7 @@ def money_micro(value):
 
 
 def _priced_tokens(price, usage):
-    p = Price(**price)
+    p = PriceSnapshot(**price)
     ordinary = usage.input_tokens - usage.cache_read_tokens - usage.cache_write_tokens
     if ordinary < 0 or usage.reasoning_tokens > usage.output_tokens or usage.cache_write_1h_tokens > usage.cache_write_tokens:
         raise ValueError('用量细分超过总量')
@@ -119,7 +119,7 @@ async def _context_owner(db, context):
 async def reserve_attempt(context, model_id, price_snapshot, max_cost, idempotency_key, *, now=None):
     if type(max_cost) is not int or max_cost < 0 or max_cost > 10**15:
         raise ValueError('预留金额无效')
-    p = Price(**price_snapshot)
+    p = PriceSnapshot(**price_snapshot)
     day, month, timestamp = periods(now)
     db = await get_db()
     try:

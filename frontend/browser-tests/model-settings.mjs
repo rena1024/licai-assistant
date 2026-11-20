@@ -15,6 +15,7 @@ import { once } from 'node:events'
 const { chromium } = createRequire(import.meta.url)('playwright')
 const root = fileURLToPath(new URL('../', import.meta.url))
 const realAPI = process.argv.includes('--real-api')
+const timePricing = process.argv.includes('--time-pricing')
 const userDeletion = process.argv.includes('--user-deletion')
 const usageDetails = process.argv.includes('--usage-details')
 const searchCheckboxes = process.argv.includes('--search-checkboxes')
@@ -32,7 +33,7 @@ await writeFile(`${fixture}/entry.jsx`, `
   import AdminPage from '../src/components/AdminPage.jsx';
   import UsagePanel from '../src/components/UsagePanel.jsx';
   import App from '../src/App.jsx';
-  ${settingsLayout ? "import '../src/index.css';" : ''}
+  ${settingsLayout || timePricing ? "import '../src/index.css';" : ''}
   import { setSessionToken } from '../src/hooks/sessionRuntime.js';
   ${realAPI ? `const login = await fetch('/api/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(new URLSearchParams(location.search).has('ordinary') ? { username: 'scroll-user', password: 'Synthetic-scroll-current-02!' } : { username: 'model-tester', password: 'Synthetic-model-test-01!' }) });
   const session = await login.json();
@@ -96,7 +97,43 @@ try {
     await route.fulfill({ response, json: data })
   })
   await page.goto(`http://127.0.0.1:18767${fixturePath}/index.html${settingsLayout ? '#settings' : ''}`)
-  if (userDeletion) {
+  if (timePricing) {
+    assert.ok(realAPI, '分时价格验收须使用隔离真实 API')
+    await page.locator('form').filter({ has: page.locator('input[name="id"]') }).locator('select').first().selectOption('deepseek')
+    assert.equal(await page.locator('input[name="model"]').inputValue(), 'deepseek-flash')
+    assert.equal(await page.locator('input[name="input"]').inputValue(), '2')
+    assert.equal(await page.locator('input[name="off_peak_cache_read"]').inputValue(), '0.02')
+    assert.equal(await page.locator('input[name="currency"]').count(), 0)
+    assert.equal(await page.locator('input[name="exchange_rate"]').count(), 0)
+    await page.locator('input[name="model"]').fill('deepseek-v4-pro')
+    assert.equal(await page.locator('input[name="input"]').inputValue(), '9')
+    assert.equal(await page.locator('input[name="off_peak_output"]').inputValue(), '13.5')
+    await page.locator('input[name="id"]').fill('timed-model')
+    await page.locator('input[name="api_key"]').fill('synthetic-price-key')
+    const save = page.getByRole('button', { name: '保存模型', exact: true })
+    await save.click()
+    await page.getByRole('status').filter({ hasText: '模型 timed-model 已保存' }).waitFor()
+    const saved = (await (await page.request.get('http://127.0.0.1:18767/api/models')).json()).models.find(model => model.id === 'timed-model')
+    assert.deepEqual(saved.time_pricing.off_peak, { input: '4.5', output: '13.5', cache_read: '0.15' })
+    assert.equal(saved.price.input, '9')
+    assert.equal(saved.price.currency, 'CNY')
+    assert.equal(saved.price.exchange_rate, '1')
+    assert.equal(saved.api_key, undefined)
+    await page.reload()
+    await page.getByRole('button', { name: '编辑 timed-model', exact: true }).click()
+    assert.equal(await page.locator('input[name="off_peak_output"]').inputValue(), '13.5')
+    for (const width of [320, 768, 1440]) {
+      await page.setViewportSize({ width, height: 900 })
+      assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1))
+    }
+    await page.locator('input[name="off_peak_output"]').fill('14')
+    await save.click()
+    await page.getByRole('status').filter({ hasText: '模型 timed-model 已保存' }).waitFor()
+    const updated = (await (await page.request.get('http://127.0.0.1:18767/api/models')).json()).models.find(model => model.id === 'timed-model')
+    assert.equal(updated.time_pricing.off_peak.output, '14')
+    assert.deepEqual(errors, [])
+    console.log('PASS: 官方价格预填、双模型切换、保存读回、人民币计价和响应式布局')
+  } else if (userDeletion) {
     await page.locator('aside').getByRole('button', { name: '账号管理', exact: true }).click()
     const remove = page.getByRole('button', { name: '删除 scroll-user', exact: true })
     await remove.waitFor()

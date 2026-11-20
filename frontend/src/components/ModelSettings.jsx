@@ -31,6 +31,11 @@ const defaultEndpoints = {
   gemini: 'https://generativelanguage.googleapis.com',
   openai_compatible: '',
 }
+// DeepSeek 官方人民币单价，单位：每百万 Token（2026-11-20 核对）。价格变化时管理员仍可修改。
+const deepseekOfficialRates = {
+  'deepseek-flash': { input: '2', cache_read: '0.04', output: '8', off_peak_input: '1', off_peak_cache_read: '0.02', off_peak_output: '4' },
+  'deepseek-v4-pro': { input: '9', cache_read: '0.30', output: '27', off_peak_input: '4.5', off_peak_cache_read: '0.15', off_peak_output: '13.5' },
+}
 
 export function ModelChoices({ scene, ids, models, onChange, disabled, children }) {
   return <fieldset disabled={disabled} className="rounded border border-border p-3 space-y-2" aria-describedby={`scene-${scene}-description`}>
@@ -55,6 +60,8 @@ export function ModelChoices({ scene, ids, models, onChange, disabled, children 
 function ModelServices({ models, reload, execute, busy, error, showTitle = true }) {
   const [editing, setEditing] = useState(null)
   const [protocol, setProtocol] = useState('ollama')
+  const [modelName, setModelName] = useState('')
+  const [deepseekRates, setDeepseekRates] = useState({})
   const [endpoint, setEndpoint] = useState(defaultEndpoints.ollama)
   const [result, setResult] = useState('')
   const [validationError, setValidationError] = useState('')
@@ -67,7 +74,7 @@ function ModelServices({ models, reload, execute, busy, error, showTitle = true 
     })
     if (!response) return
     if (editing?.id === model.id) {
-      setEditing(null); setProtocol('ollama'); setEndpoint(defaultEndpoints.ollama)
+      setEditing(null); setProtocol('ollama'); setModelName(''); setDeepseekRates({}); setEndpoint(defaultEndpoints.ollama)
     }
     setResult(`模型 ${model.id} 已${remove ? '删除' : model.enabled ? '停用' : '启用'}`)
     try { await reload() }
@@ -79,19 +86,20 @@ function ModelServices({ models, reload, execute, busy, error, showTitle = true 
     const form = event.currentTarget
     const values = Object.fromEntries(new FormData(form))
     const local = protocol === 'ollama'
-    const price = local ? null : { ...Object.fromEntries(['input', 'output', 'cache_read', 'cache_write', 'exchange_rate', 'currency'].map(k => [k, values[k]])), cache_write_1h: values.cache_write_1h || null }
-    if (protocol === 'deepseek') {
-      // 统一计价结构中，cache_read 对应缓存命中输入；DeepSeek 没有独立写入计费。
-      price.cache_write = '0'
-      price.cache_write_1h = null
-    }
-    const payload = { id: values.id, protocol, endpoint: values.endpoint.trim().replace(/\/$/, ''), model: values.model,
+    const price = local ? null : protocol === 'deepseek'
+      ? { currency: 'CNY', exchange_rate: '1', input: deepseekRates.input, output: deepseekRates.output, cache_read: deepseekRates.cache_read, cache_write: '0', cache_write_1h: null }
+      : { ...Object.fromEntries(['input', 'output', 'cache_read', 'cache_write', 'exchange_rate', 'currency'].map(k => [k, values[k]])), cache_write_1h: values.cache_write_1h || null }
+    // 统一计价结构中，DeepSeek 的 cache_read 对应缓存命中输入，没有独立写入计费。
+    const time_pricing = protocol === 'deepseek'
+      ? { off_peak: Object.fromEntries(['input', 'output', 'cache_read'].map(key => [key, deepseekRates[`off_peak_${key}`]])) }
+      : null
+    const payload = { id: values.id, protocol, endpoint: values.endpoint.trim().replace(/\/$/, ''), model: modelName,
       local, enabled: values.enabled === 'on', api_key: editing?.has_key && values.api_key === savedKeyMask ? '' : values.api_key, capabilities: Object.keys(capabilities).filter(c => values[c] === 'on'),
-      context_limit: Number(values.context_limit), price, expected_version: editing?.version || 0 }
+      context_limit: Number(values.context_limit), price, time_pricing, expected_version: editing?.version || 0 }
     setSaving(true)
     try {
       if (await execute('/api/models', 'PUT', payload)) {
-        form.reset(); setEditing(null); setProtocol('ollama'); setEndpoint(defaultEndpoints.ollama)
+        form.reset(); setEditing(null); setProtocol('ollama'); setModelName(''); setDeepseekRates({}); setEndpoint(defaultEndpoints.ollama)
         setResult(`模型 ${payload.id} 已保存`)
         try { await reload() }
         catch { setValidationError('模型已保存，但列表刷新失败，请刷新页面查看。') }
@@ -111,7 +119,12 @@ function ModelServices({ models, reload, execute, busy, error, showTitle = true 
       </p>
       <p>{m.capabilities.map(c => capabilities[c]).join(' / ')} · {m.validation_status || '尚未真实联调'}</p>
       {!m.local && <p className="text-xs text-text-dim">API Key：{m.has_key ? '已保存（不回显）' : '未配置'}</p>}
-      <button type="button" disabled={busy} onClick={() => { setEditing(m); setProtocol(m.protocol); setEndpoint(m.endpoint) }} className={`mr-3 ${settingsButton.secondary}`}>编辑 {m.id}</button>
+      <button type="button" disabled={busy} onClick={() => {
+        setEditing(m); setProtocol(m.protocol); setModelName(m.model); setEndpoint(m.endpoint)
+        setDeepseekRates(m.time_pricing
+          ? { ...Object.fromEntries(['input', 'cache_read', 'output'].map(key => [key, m.price?.[key] ?? ''])), ...Object.fromEntries(['input', 'cache_read', 'output'].map(key => [`off_peak_${key}`, m.time_pricing.off_peak[key]])) }
+          : { ...deepseekOfficialRates[m.model] })
+      }} className={`mr-3 ${settingsButton.secondary}`}>编辑 {m.id}</button>
       <button type="button" disabled={busy || saving} aria-label={`${m.enabled ? '停用' : '启用'} ${m.id}`} onClick={() => manageModel(m)} className={`mr-3 ${settingsButton.secondary}`}>{m.enabled ? '停用' : '启用'}</button>
       <button type="button" disabled={busy || saving || m.enabled} aria-label={`删除 ${m.id}`} title={m.enabled ? '请先停用，再删除' : '删除模型服务配置'} onClick={() => manageModel(m, true)} className={`mr-3 ${settingsButton.danger}`}>删除</button>
       {m.capabilities.map(capability => <button key={capability} type="button" disabled={busy} onClick={async () => {
@@ -133,24 +146,38 @@ function ModelServices({ models, reload, execute, busy, error, showTitle = true 
       <label>模型标识<input name="id" required pattern="[a-zA-Z0-9_\-]{1,64}" title="请输入 1–64 位英文字母、数字、下划线或连字符，例如 local-qwen" aria-describedby="model-id-help" readOnly={!!editing} defaultValue={editing?.id || ''} className={inputClass} /></label>
       <label>协议<select value={protocol} onChange={e => {
         setProtocol(e.target.value); setEndpoint(defaultEndpoints[e.target.value])
+        if (e.target.value === 'deepseek') { setModelName('deepseek-flash'); setDeepseekRates({ ...deepseekOfficialRates['deepseek-flash'] }) }
       }} className={inputClass}>
         {Object.keys(defaultEndpoints).map(p => <option key={p}>{p}</option>)}
       </select></label>
       <label>服务基础地址<input name="endpoint" type="url" required value={endpoint} onChange={e => setEndpoint(e.target.value)} aria-describedby="model-endpoint-help" placeholder={protocol === 'openai_compatible' ? 'https://example.com/v1' : undefined} className={inputClass} /></label>
-      <label>厂商模型 ID<input name="model" required defaultValue={editing?.model || ''} className={inputClass} /></label>
+      <label>厂商模型 ID<input name="model" required value={modelName} onChange={event => {
+        const value = event.target.value
+        setModelName(value)
+        if (protocol === 'deepseek') setDeepseekRates(deepseekOfficialRates[value] ? { ...deepseekOfficialRates[value] } : {})
+      }} className={inputClass} /></label>
       <p id="model-endpoint-help" className="sm:col-span-2 text-xs text-text-dim">切换协议会填入默认基础地址，仍可手动修改。{protocol === 'qwen' ? 'Qwen 默认北京地域，其他地域请按账号修改地址。' : protocol === 'openai_compatible' ? '自定义兼容服务请填写服务商提供的基础地址。' : '请求路径由系统自动追加。'}</p>
       <p id="model-id-help" className="sm:col-span-2 text-xs text-text-dim">模型标识是自定义名称，仅支持 1–64 位英文字母、数字、下划线或连字符，例如 local-qwen；qwen3:4b 等实际名称请填写在“厂商模型 ID”。</p>
       <label>上下文 Token 上限<input name="context_limit" type="number" min="1024" max="2000000" required defaultValue={editing?.context_limit || 32768} className={inputClass} /></label>
       <label>API Key（留空保留）<input name="api_key" type="password" autoComplete="new-password" aria-describedby="model-key-help" defaultValue={editing?.has_key ? savedKeyMask : ''} onFocus={event => { if (editing?.has_key && event.target.value === savedKeyMask) event.target.select() }} placeholder="输入 API Key" className={inputClass} /></label>
       <p id="model-key-help" className="sm:col-span-2 text-xs text-text-dim">{editing?.has_key ? '星号表示密钥已保存，不是真实密钥。保持星号或留空保存会保留原密钥，填写新值才替换。' : '保存后的密钥不会回显，编辑时留空会保留原密钥。'}</p>
-      {protocol !== 'ollama' && <>
+      {protocol === 'deepseek' && <fieldset className="sm:col-span-2 rounded border border-border p-3">
+        <legend>DeepSeek 价格（人民币 / 百万 Token）</legend>
+        <p className="mb-2 text-xs text-text-dim">按<a href="https://api-docs.deepseek.com/zh-cn/quick_start/pricing/" target="_blank" rel="noreferrer" className="underline">官方价格表</a>预填，可按厂商最新价格修改。北京时间周一至周五（法定节假日除外）09:00～12:00、14:00～18:00 为高峰，其余时间为空闲。</p>
+        {editing?.protocol === 'deepseek' && !editing.time_pricing && <p className="mb-2 text-xs text-text-dim">此模型目前使用旧固定单价；保存后将改用这里显示的人民币分时价格，请核对后保存。</p>}
+        <div className="grid gap-3 sm:grid-cols-3">{[['高峰', ''], ['空闲', 'off_peak_']].flatMap(([period, prefix]) =>
+          [['cache_read', '缓存命中输入'], ['input', '缓存未命中输入'], ['output', '输出']].map(([key, label]) =>
+            <label key={`${prefix}${key}`}>{period} · {label}<input name={`${prefix}${key}`} required type="number" min="0" step="any" value={deepseekRates[`${prefix}${key}`] ?? ''} onChange={event => setDeepseekRates(current => ({ ...current, [`${prefix}${key}`]: event.target.value }))} className={inputClass} /></label>))}</div>
+        <p className="mt-2 text-xs text-text-dim">每次尝试按发起时价格估算，跨时段不重算；预算按两档较高价预留。费用以厂商账单为准。</p>
+      </fieldset>}
+      {protocol !== 'ollama' && protocol !== 'deepseek' && <>
         <label>原币<select name="currency" defaultValue={editing?.price?.currency || 'CNY'} className={inputClass}><option>CNY</option><option>USD</option></select></label>
-        {(protocol === 'deepseek' ? ['exchange_rate', 'cache_read', 'input', 'output'] : ['exchange_rate', 'input', 'output', 'cache_read', 'cache_write']).map(k => <label key={k}>{({ exchange_rate: '人民币汇率', input: protocol === 'deepseek' ? '缓存未命中输入单价' : '输入单价', output: '输出单价', cache_read: protocol === 'deepseek' ? '缓存命中输入单价' : '缓存读取单价', cache_write: '缓存写入单价' })[k]}<input name={k} required type="number" min={k === 'exchange_rate' ? '0.000001' : '0'} step="any" defaultValue={editing?.price?.[k] ?? ''} className={inputClass} /></label>)}
-        {protocol !== 'deepseek' && <label>一小时缓存写入单价（可选）<input name="cache_write_1h" type="number" min="0" step="any" defaultValue={editing?.price?.cache_write_1h ?? ''} className={inputClass} /></label>}
+        {['exchange_rate', 'input', 'output', 'cache_read', 'cache_write'].map(k => <label key={k}>{({ exchange_rate: '人民币汇率', input: '输入单价', output: '输出单价', cache_read: '缓存读取单价', cache_write: '缓存写入单价' })[k]}<input name={k} required type="number" min={k === 'exchange_rate' ? '0.000001' : '0'} step="any" defaultValue={editing?.price?.[k] ?? ''} className={inputClass} /></label>)}
+        <label>一小时缓存写入单价（可选）<input name="cache_write_1h" type="number" min="0" step="any" defaultValue={editing?.price?.cache_write_1h ?? ''} className={inputClass} /></label>
       </>}
       <fieldset className="sm:col-span-2"><legend>开放能力</legend>{Object.entries(capabilities).map(([key, label]) => <label key={key} className="mr-4"><input type="checkbox" name={key} defaultChecked={editing ? editing.capabilities.includes(key) : key === 'text'} /> {label}</label>)}</fieldset>
       <label><input type="checkbox" name="enabled" defaultChecked={editing ? editing.enabled : true} /> 开放此模型</label>
-      <div className="sm:col-span-2 flex flex-wrap items-center gap-3"><button type="submit" disabled={busy || saving} className={settingsButton.primary}>{saving ? '正在保存模型…' : '保存模型'}</button><SaveStatus busy={saving} message={result} error={validationError || error} />{editing && <button type="button" disabled={busy || saving} onClick={() => { setEditing(null); setProtocol('ollama'); setEndpoint(defaultEndpoints.ollama) }} className={settingsButton.secondary}>取消编辑</button>}</div>
+      <div className="sm:col-span-2 flex flex-wrap items-center gap-3"><button type="submit" disabled={busy || saving} className={settingsButton.primary}>{saving ? '正在保存模型…' : '保存模型'}</button><SaveStatus busy={saving} message={result} error={validationError || error} />{editing && <button type="button" disabled={busy || saving} onClick={() => { setEditing(null); setProtocol('ollama'); setModelName(''); setDeepseekRates({}); setEndpoint(defaultEndpoints.ollama) }} className={settingsButton.secondary}>取消编辑</button>}</div>
     </form>
   </section>
 }
